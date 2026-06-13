@@ -17,7 +17,7 @@
 // ---------------------------------------------------------------------------
 // Forward declare the driver so safe_read / can_read can use it
 // ---------------------------------------------------------------------------
-class KM_Driver;
+class MemoryReader;
 
 // ---------------------------------------------------------------------------
 // 3D / 2D Math primitives (compatible with glm-style usage)
@@ -211,31 +211,31 @@ namespace sdk
     // safe_read / can_read — delegate to kernel driver
     // -----------------------------------------------------------------------
     template<typename T>
-    inline bool safe_read(const KM_Driver& driver, HANDLE pid, uint64_t address, T& out)
+    inline bool safe_read(const MemoryReader& reader, uint64_t address, T& out)
     {
         if (address == 0)
             return false;
-        return driver.ReadMemory<T>(pid, address, out);
+        return reader.ReadMemory<T>(address, out);
     }
 
-    inline bool can_read(const KM_Driver& driver, HANDLE pid, uint64_t address)
+    inline bool can_read(const MemoryReader& reader, uint64_t address)
     {
         if (address == 0)
             return false;
         uint8_t dummy = 0;
-        return driver.ReadMemory<uint8_t>(pid, address, dummy);
+        return reader.ReadMemory<uint8_t>(address, dummy);
     }
 
     // -----------------------------------------------------------------------
     // ReadChain convenience wrapper
     // -----------------------------------------------------------------------
     template<typename T>
-    inline bool read_chain(const KM_Driver& driver, HANDLE pid, uint64_t baseAddress,
+    inline bool read_chain(const MemoryReader& reader, uint64_t baseAddress,
                            const std::vector<uint64_t>& offsets, T& out)
     {
         if (baseAddress == 0)
             return false;
-        return driver.ReadChain<T>(pid, baseAddress, offsets, out);
+        return reader.ReadChain<T>(baseAddress, offsets, out);
     }
 
     // -----------------------------------------------------------------------
@@ -283,11 +283,11 @@ namespace sdk
     //     [r00, r01, r02, tx,  r10, r11, r12, ty,  r20, r21, r22, tz]
     //   We reconstruct a 4x4 matrix from this and apply the affine transform.
     // -----------------------------------------------------------------------
-    inline Vector3 Affine(const KM_Driver& driver, HANDLE pid,
+    inline Vector3 Affine(const MemoryReader& reader,
                           uint64_t matrixAddress, const Vector3& localPos)
     {
         float raw[12];
-        if (!driver.ReadMemoryRaw(pid, matrixAddress, raw, sizeof(raw)))
+        if (!reader.ReadMemoryRaw(matrixAddress, raw, sizeof(raw)))
             return Vector3(0, 0, 0);
 
         // Reconstruct row-major 4x4 from Messiah 4x3 layout:
@@ -379,7 +379,7 @@ namespace sdk
     //   transforms. Each entry is 0x20 bytes, with the translation stored as
     //   the first three floats (Vector3) at offset 0.
     // -----------------------------------------------------------------------
-    inline bool ReadBoneWorldPosition(const KM_Driver& driver, HANDLE pid,
+    inline bool ReadBoneWorldPosition(const MemoryReader& reader,
                                        uint64_t skeletonComponentAddr,
                                        int boneIndex,
                                        Vector3& outWorldPos)
@@ -388,7 +388,7 @@ namespace sdk
         uint64_t boneAddr = MessiahMatrixAdd(skeletonComponentAddr, boneIndex, BONE_STRIDE);
 
         // Translation is the first 3 floats at the bone address
-        if (!driver.ReadMemoryRaw(pid, boneAddr, &outWorldPos, sizeof(Vector3)))
+        if (!reader.ReadMemoryRaw(boneAddr, &outWorldPos, sizeof(Vector3)))
             return false;
 
         return true;

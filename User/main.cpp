@@ -1,10 +1,13 @@
 // ============================================================================
 // main.cpp — BloodStrike ESP
 //
-//   Initializes the kernel driver overlay, finds the game process,
-//   iterates through the entity list, reads bone transforms via the
-//   driver, converts to screen coordinates, and draws ESP (skeleton,
-//   corner box, health info).
+//   Initializes the overlay, finds the game process,
+//   iterates through the entity list, reads bone transforms via
+//   direct NT API calls (NtReadVirtualMemory), converts to screen
+//   coordinates, and draws ESP (skeleton, corner box, health info).
+//
+//   No kernel driver required — reads memory directly from usermode
+//   using dynamically resolved NT functions (bypasses IAT hooks).
 // ============================================================================
 
 #define WIN32_LEAN_AND_MEAN
@@ -109,7 +112,7 @@ struct EntityInfo
 // ---------------------------------------------------------------------------
 // Read entity data from the game
 // ---------------------------------------------------------------------------
-bool ReadEntity(const KM_Driver& driver, HANDLE pid, uint64_t gameBase,
+bool ReadEntity(MemoryReader& reader, uint64_t gameBase,
                 uint64_t entityAddress, EntityInfo& entity, bool isLocal)
 {
     entity.actorAddress = entityAddress;
@@ -117,16 +120,13 @@ bool ReadEntity(const KM_Driver& driver, HANDLE pid, uint64_t gameBase,
 
     // Verify the entity has the Actor vtable
     uint64_t vtablePtr = 0;
-    if (!driver.ReadMemory<uint64_t>(pid, entityAddress, vtablePtr))
+    if (!reader.ReadMemory<uint64_t>(entityAddress, vtablePtr))
         return false;
-
-    // Optional: check against known Actor vtable
-    // (We skip strict vtable check since it may vary; rely on chain reads instead)
 
     // Read actor properties pointer:
     // actorInstance + field::actorInstance_to_actorProps (0x278) -> actorProps
     uint64_t actorProps = 0;
-    if (!driver.ReadMemory<uint64_t>(pid,
+    if (!reader.ReadMemory<uint64_t>(
             entityAddress + bloodstrike::field::actorInstance_to_actorProps,
             actorProps))
         return false;
@@ -135,9 +135,8 @@ bool ReadEntity(const KM_Driver& driver, HANDLE pid, uint64_t gameBase,
         return false;
 
     // Read entity mask (health / alive status from IEntity)
-    // IEntity is at the base of the actor. mask at IEntity + 0x2E0
     uint32_t entityMask = 0;
-    if (!driver.ReadMemory<uint32_t>(pid,
+    if (!reader.ReadMemory<uint32_t>(
             entityAddress + bloodstrike::field::IEntity_to_entityMask,
             entityMask))
         return false;
@@ -148,53 +147,31 @@ bool ReadEntity(const KM_Driver& driver, HANDLE pid, uint64_t gameBase,
     entity.team    = (entityMask >> 16) & 0xFF;
 
     // Read the skeleton component from the actor
-    // Typically the skeleton is found via the SkeletonComponent vtable
-    // We need to scan actor's components for the skeleton
-    // Common pattern: Actor + 0x98 -> TArray<Component*>
     uint64_t componentsArray = 0;
     uint32_t componentsCount = 0;
-    if (!driver.ReadMemory<uint64_t>(pid, entityAddress + 0x98, componentsArray))
+    if (!reader.ReadMemory<uint64_t>(entityAddress + 0x98, componentsArray))
         return false;
-    if (!driver.ReadMemory<uint32_t>(pid, entityAddress + 0xA0, componentsCount))
+    if (!reader.ReadMemory<uint32_t>(entityAddress + 0xA0, componentsCount))
         return false;
-
-    // For Messiah Engine, the skeleton is often at a fixed offset in the actor
-    // due to the ActorComponent hierarchy.
-    // Simplified: try to read bone transforms from known skeleton offset.
-    // In practice, the skeleton component can be found by scanning components,
-    // but for performance we use a known fixed offset pattern.
-    //
-    // Common Actor layout:
-    //   +0x000: vtable (Messiah__Actor)
-    //   +0x008..0x278: Actor fields
-    //   +0x278: actorProps (ActorProperties*)
-    //   +0x098: Components array (TArray<Component*>)
-    //
-    // The skeleton component is often at a component index (e.g. index 2 or 3).
-    // We'll try to read the skeleton component pointer from the components array.
 
     uint64_t skeletonComp = 0;
     const int SKELETON_COMP_INDEX = 2; // Example index — adjust per game version
 
     if (componentsArray != 0 && componentsCount > SKELETON_COMP_INDEX)
     {
-        driver.ReadMemory<uint64_t>(pid,
+        reader.ReadMemory<uint64_t>(
             componentsArray + SKELETON_COMP_INDEX * sizeof(uint64_t),
             skeletonComp);
     }
 
     // If we couldn't find skeleton via components, try the pose offset directly
-    // from actor properties: actorProps + known offset -> Pose
-    // pose_to_BipedPose = 0x90 relative to Pose object
     if (skeletonComp == 0)
     {
-        // Try to find pose from actor props
         uint64_t posePtr = 0;
-        if (driver.ReadMemory<uint64_t>(pid, actorProps + 0x50, posePtr) && posePtr != 0)
+        if (reader.ReadMemory<uint64_t>(actorProps + 0x50, posePtr) && posePtr != 0)
         {
-            // posePtr + pose_to_BipedPose -> actual bone data
             uint64_t bipedPose = 0;
-            if (driver.ReadMemory<uint64_t>(pid,
+            if (reader.ReadMemory<uint64_t>(
                     posePtr + bloodstrike::field::pose_to_BipedPose,
                     bipedPose) && bipedPose != 0)
             {
@@ -206,12 +183,10 @@ bool ReadEntity(const KM_Driver& driver, HANDLE pid, uint64_t gameBase,
     if (skeletonComp == 0)
         return false;
 
-    // Zero-initialize bone positions to prevent uninitialized stack garbage
-    // if any individual bone read fails.
+    // Zero-initialize bone positions
     memset(entity.bonePositions, 0, sizeof(entity.bonePositions));
 
     // Read bone positions
-    // Use the bone indices defined in SDK_BloodStrike.h
     const int BONES_TO_READ[] = {
         bloodstrike::BONE_HEAD,
         bloodstrike::BONE_NECK,
@@ -234,7 +209,7 @@ bool ReadEntity(const KM_Driver& driver, HANDLE pid, uint64_t gameBase,
     {
         if (boneIdx >= 0 && boneIdx < 28)
         {
-            sdk::ReadBoneWorldPosition(driver, pid, skeletonComp, boneIdx,
+            sdk::ReadBoneWorldPosition(reader, skeletonComp, boneIdx,
                                        entity.bonePositions[boneIdx]);
         }
     }
@@ -243,7 +218,7 @@ bool ReadEntity(const KM_Driver& driver, HANDLE pid, uint64_t gameBase,
     entity.headPos = entity.bonePositions[bloodstrike::BONE_HEAD];
     entity.footPos = entity.bonePositions[bloodstrike::BONE_PELVIS];
     // Adjust foot to be below pelvis
-    entity.footPos.y -= 40.0f; // Approximate height offset
+    entity.footPos.y -= 40.0f;
 
     return true;
 }
@@ -251,13 +226,12 @@ bool ReadEntity(const KM_Driver& driver, HANDLE pid, uint64_t gameBase,
 // ---------------------------------------------------------------------------
 // Get camera matrix from local player
 // ---------------------------------------------------------------------------
-bool GetCameraMatrix(const KM_Driver& driver, HANDLE pid, uint64_t gameBase,
+bool GetCameraMatrix(MemoryReader& reader, uint64_t gameBase,
                      uint64_t localPlayerAddr, Matrix4x4& outMatrix)
 {
     // Read camera pointer from local player:
-    // ClientPlayer + field::ClientPlayer_to_camera (0x238) -> ICamera*
     uint64_t cameraPtr = 0;
-    if (!driver.ReadMemory<uint64_t>(pid,
+    if (!reader.ReadMemory<uint64_t>(
             localPlayerAddr + bloodstrike::field::ClientPlayer_to_camera,
             cameraPtr))
         return false;
@@ -267,21 +241,14 @@ bool GetCameraMatrix(const KM_Driver& driver, HANDLE pid, uint64_t gameBase,
 
     // Verify camera vtable
     uint64_t cameraVtable = 0;
-    if (!driver.ReadMemory<uint64_t>(pid, cameraPtr, cameraVtable))
+    if (!reader.ReadMemory<uint64_t>(cameraPtr, cameraVtable))
         return false;
 
-    // Optional: verify against Messiah__ICamera vtable
-    // uint64_t expectedVtable = gameBase + bloodstrike::vftables::Messiah__ICamera;
-    // if (cameraVtable != expectedVtable) return false;
-
-    // Read the view-projection matrix from the camera object.
-    // ICamera typically stores the view-projection matrix at a fixed offset.
-    // Common offsets: 0x30, 0x40, or 0x50 for the 4x4 matrix.
-    // We'll try offset 0x30 (common for Messiah Engine).
-    if (!driver.ReadMemoryRaw(pid, cameraPtr + 0x30, outMatrix.data, sizeof(float) * 16))
+    // Read the view-projection matrix from the camera object
+    if (!reader.ReadMemoryRaw(cameraPtr + 0x30, outMatrix.data, sizeof(float) * 16))
         return false;
 
-    // Validate matrix — reject NaN/Inf which would corrupt all W2S calculations
+    // Validate matrix — reject NaN/Inf
     for (int i = 0; i < 16; i++)
     {
         if (!std::isfinite(outMatrix.data[i]))
@@ -294,13 +261,13 @@ bool GetCameraMatrix(const KM_Driver& driver, HANDLE pid, uint64_t gameBase,
 // ---------------------------------------------------------------------------
 // Get local player and engine info
 // ---------------------------------------------------------------------------
-bool GetLocalPlayer(const KM_Driver& driver, HANDLE pid, uint64_t gameBase,
+bool GetLocalPlayer(MemoryReader& reader, uint64_t gameBase,
                     uint64_t& outClientEngine, uint64_t& outLocalPlayer,
                     uint64_t& outEntityList)
 {
     // Read ClientEngine pointer
     uint64_t clientEnginePtr = 0;
-    if (!driver.ReadMemory<uint64_t>(pid,
+    if (!reader.ReadMemory<uint64_t>(
             gameBase + bloodstrike::offsets::Messiah__ClientEngine,
             clientEnginePtr))
         return false;
@@ -311,9 +278,8 @@ bool GetLocalPlayer(const KM_Driver& driver, HANDLE pid, uint64_t gameBase,
     outClientEngine = clientEnginePtr;
 
     // Read IGameplay from ClientEngine:
-    // ClientEngine + field::ClientEngine_to_IGameplay (0x58) -> IGameplay*
     uint64_t gameplayPtr = 0;
-    if (!driver.ReadMemory<uint64_t>(pid,
+    if (!reader.ReadMemory<uint64_t>(
             clientEnginePtr + bloodstrike::field::ClientEngine_to_IGameplay,
             gameplayPtr))
         return false;
@@ -323,14 +289,14 @@ bool GetLocalPlayer(const KM_Driver& driver, HANDLE pid, uint64_t gameBase,
 
     // The local player object (ClientPlayer) is typically at IGameplay + 0x10
     uint64_t localPlayerPtr = 0;
-    if (!driver.ReadMemory<uint64_t>(pid, gameplayPtr + 0x10, localPlayerPtr))
+    if (!reader.ReadMemory<uint64_t>(gameplayPtr + 0x10, localPlayerPtr))
         return false;
 
     outLocalPlayer = localPlayerPtr;
 
     // Read entity list base
     uint64_t entityListBase = 0;
-    if (!driver.ReadMemory<uint64_t>(pid,
+    if (!reader.ReadMemory<uint64_t>(
             gameBase + bloodstrike::offsets::Messiah__EntityList,
             entityListBase))
         return false;
@@ -342,14 +308,14 @@ bool GetLocalPlayer(const KM_Driver& driver, HANDLE pid, uint64_t gameBase,
 // ---------------------------------------------------------------------------
 // Main ESP loop
 // ---------------------------------------------------------------------------
-void ESPLoop(const KM_Driver& driver, HANDLE pid, uint64_t gameBase,
+void ESPLoop(MemoryReader& reader, uint64_t gameBase,
              Overlay& overlay)
 {
     uint64_t clientEngine  = 0;
     uint64_t localPlayer   = 0;
     uint64_t entityListPtr = 0;
 
-    if (!GetLocalPlayer(driver, pid, gameBase, clientEngine, localPlayer, entityListPtr))
+    if (!GetLocalPlayer(reader, gameBase, clientEngine, localPlayer, entityListPtr))
     {
         std::cerr << "[ESP] Failed to get local player / engine pointers.\n";
         return;
@@ -360,7 +326,7 @@ void ESPLoop(const KM_Driver& driver, HANDLE pid, uint64_t gameBase,
 
     // Local player -> local actor
     uint64_t localActor = 0;
-    if (!driver.ReadMemory<uint64_t>(pid,
+    if (!reader.ReadMemory<uint64_t>(
             localPlayer + bloodstrike::field::ClientPlayer_to_localActor,
             localActor))
     {
@@ -376,7 +342,7 @@ void ESPLoop(const KM_Driver& driver, HANDLE pid, uint64_t gameBase,
 
     // Initialize local player info
     EntityInfo localEntity;
-    ReadEntity(driver, pid, gameBase, localActor, localEntity, true);
+    ReadEntity(reader, gameBase, localActor, localEntity, true);
 
     // Track FPS
     auto lastFrameTime = std::chrono::steady_clock::now();
@@ -402,7 +368,6 @@ void ESPLoop(const KM_Driver& driver, HANDLE pid, uint64_t gameBase,
         }
 
         // ---- Poll Insert key to toggle global visibility ----
-        // (The overlay window cannot receive keyboard focus, so we poll globally)
         {
             static bool s_insertWasDown = false;
             bool isDown = (GetAsyncKeyState(VK_INSERT) & 0x8000) != 0;
@@ -414,24 +379,24 @@ void ESPLoop(const KM_Driver& driver, HANDLE pid, uint64_t gameBase,
         // ---- Re-read local actor address (may change on respawn) ----
         {
             uint64_t currentLocalActor = 0;
-            driver.ReadMemory<uint64_t>(pid,
+            reader.ReadMemory<uint64_t>(
                 localPlayer + bloodstrike::field::ClientPlayer_to_localActor,
                 currentLocalActor);
             if (currentLocalActor != 0 && currentLocalActor != localActor)
             {
                 localActor = currentLocalActor;
-                ReadEntity(driver, pid, gameBase, localActor, localEntity, true);
+                ReadEntity(reader, gameBase, localActor, localEntity, true);
             }
         }
 
-        // ---- Re-read local player position each frame for accurate distances ----
+        // ---- Re-read local player position each frame ----
         EntityInfo updatedLocal;
-        if (ReadEntity(driver, pid, gameBase, localActor, updatedLocal, true))
+        if (ReadEntity(reader, gameBase, localActor, updatedLocal, true))
             localEntity.headPos = updatedLocal.headPos;
 
         // ---- Read camera matrix ----
         Matrix4x4 camMatrix;
-        if (!GetCameraMatrix(driver, pid, gameBase, localPlayer, camMatrix))
+        if (!GetCameraMatrix(reader, gameBase, localPlayer, camMatrix))
         {
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
             continue;
@@ -439,7 +404,7 @@ void ESPLoop(const KM_Driver& driver, HANDLE pid, uint64_t gameBase,
 
         // ---- Re-read entity list pointer (may change) ----
         uint64_t entityListBase = 0;
-        driver.ReadMemory<uint64_t>(pid,
+        reader.ReadMemory<uint64_t>(
             gameBase + bloodstrike::offsets::Messiah__EntityList,
             entityListBase);
 
@@ -470,7 +435,7 @@ void ESPLoop(const KM_Driver& driver, HANDLE pid, uint64_t gameBase,
         for (int i = 0; i < MAX_ENTITIES; i++)
         {
             uint64_t entityAddr = 0;
-            if (!driver.ReadMemory<uint64_t>(pid,
+            if (!reader.ReadMemory<uint64_t>(
                     entityListBase + i * ENTITY_STRIDE,
                     entityAddr))
                 continue;
@@ -480,21 +445,19 @@ void ESPLoop(const KM_Driver& driver, HANDLE pid, uint64_t gameBase,
 
             // Read entity data
             EntityInfo entity;
-            if (!ReadEntity(driver, pid, gameBase, entityAddr, entity, false))
+            if (!ReadEntity(reader, gameBase, entityAddr, entity, false))
                 continue;
 
             if (!entity.isAlive)
                 continue;
 
             // ---- World to Screen for bones ----
-            // Head position -> screen
             Vector2 headScreen, pelvisScreen;
             bool headOnScreen = sdk::w2s(camMatrix, entity.headPos, headScreen, screenW, screenH);
 
             if (!headOnScreen)
                 continue;
 
-            // Pelvis (or foot) position -> screen
             sdk::w2s(camMatrix, entity.footPos, pelvisScreen, screenW, screenH);
 
             // ---- Distance calculation ----
@@ -567,7 +530,7 @@ void ESPLoop(const KM_Driver& driver, HANDLE pid, uint64_t gameBase,
                 }
             }
 
-            // ---- Skeleton drawing (only if toggled on) ----
+            // ---- Skeleton drawing ----
             if (toggles.skeleton)
             {
                 const int SKELETON_PAIRS[][2] = {
@@ -674,12 +637,10 @@ int main()
     HWND gameWindow = FindWindowW(NULL, L"BloodStrike");
     if (gameWindow == NULL)
     {
-        // Try finding by class or other means
         gameWindow = FindWindowW(L"UnrealWindow", L"BloodStrike");
     }
     if (gameWindow == NULL)
     {
-        // Fallback: find any visible window belonging to the target process
         struct EnumCtx { DWORD pid; HWND out; };
         EnumCtx ctx = { gamePid, NULL };
         EnumWindows([](HWND hwnd, LPARAM lParam) -> BOOL {
@@ -706,20 +667,19 @@ int main()
 
     std::wcout << L"[+] Found game window: 0x" << std::hex << (uint64_t)gameWindow << std::dec << L"\n";
 
-    // ---- Step 4: Initialize the driver ----
-    KM_Driver driver;
-
-    if (!driver.isConnected())
+    // ---- Step 4: Open target process for memory reading ----
+    // Uses NtOpenProcess from ntdll (bypasses kernel32 hooks)
+    MemoryReader reader;
+    if (!reader.Open(gamePid))
     {
-        std::wcerr << L"[ERROR] Failed to connect to kernel driver "
-                    L"(\\\\.\\BS_KernelDriver).\n";
-        std::wcout << L"Ensure the driver is loaded before running this program.\n";
+        std::wcerr << L"[ERROR] Failed to open game process for memory reading.\n";
+        std::wcout << L"Make sure the game is running and you are running as Administrator.\n";
         std::wcout << L"Press Enter to exit...";
         std::cin.get();
         return 1;
     }
 
-    std::wcout << L"[+] Kernel driver connected.\n";
+    std::wcout << L"[+] Process opened for memory reading (NtReadVirtualMemory).\n";
 
     // ---- Step 5: Initialize overlay ----
     Overlay overlay;
@@ -735,8 +695,7 @@ int main()
     std::wcout << L"[+] ESP running. Press Alt+F4 or close the game to exit.\n\n";
 
     // ---- Step 6: Run ESP loop ----
-    HANDLE hProcess = (HANDLE)(ULONG_PTR)gamePid;
-    ESPLoop(driver, hProcess, gameBase, overlay);
+    ESPLoop(reader, gameBase, overlay);
 
     std::wcout << L"\n[ESP] Shutting down.\n";
     return 0;

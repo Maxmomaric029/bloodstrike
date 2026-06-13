@@ -1,98 +1,171 @@
 #pragma once
 
 #include <windows.h>
+#include <winternl.h>
 #include <vector>
 #include <cstdint>
 #include <string>
-#include <stdexcept>
 #include <iostream>
+#include <cstring>
 
-#include "../Kernel/common.h"
+// NT_SUCCESS may not be defined by all Windows SDK versions via winternl.h alone
+#ifndef NT_SUCCESS
+#define NT_SUCCESS(Status) (((NTSTATUS)(Status)) >= 0)
+#endif
 
 // ---------------------------------------------------------------------------
-// KM_Driver — communicates with \\.\BS_KernelDriver via DeviceIoControl
+// MemoryReader — reads game memory via direct NT API calls
+//
+//   Bypass techniques:
+//   - Resolves NtOpenProcess + NtReadVirtualMemory at runtime from ntdll.dll
+//     (no static IAT imports that anticheats can hook)
+//   - Opens process handle ONCE and reuses it (avoids repeated OpenProcess)
+//   - Uses PROCESS_VM_READ only (minimum required rights)
+//   - Separate process overlay (no injection into the game)
 // ---------------------------------------------------------------------------
-class KM_Driver
+
+// NT API function pointer types
+typedef NTSTATUS (NTAPI* pfnNtOpenProcess)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, PCLIENT_ID);
+typedef NTSTATUS (NTAPI* pfnNtReadVirtualMemory)(HANDLE, PVOID, PVOID, SIZE_T, PSIZE_T);
+
+class MemoryReader
 {
 private:
-    HANDLE m_hDriver;
+    HANDLE m_hProcess;
+    DWORD  m_processId;
+    bool   m_connected;
+
+    // Dynamically resolved NT functions
+    pfnNtOpenProcess       m_NtOpenProcess;
+    pfnNtReadVirtualMemory m_NtReadVirtualMemory;
+
+    bool ResolveFunctions()
+    {
+        HMODULE hNtdll = GetModuleHandleW(L"ntdll.dll");
+        if (!hNtdll)
+        {
+            std::cerr << "[MemoryReader] Cannot get ntdll.dll handle.\n";
+            return false;
+        }
+
+        m_NtOpenProcess       = (pfnNtOpenProcess)GetProcAddress(hNtdll, "NtOpenProcess");
+        m_NtReadVirtualMemory = (pfnNtReadVirtualMemory)GetProcAddress(hNtdll, "NtReadVirtualMemory");
+
+        if (!m_NtOpenProcess || !m_NtReadVirtualMemory)
+        {
+            std::cerr << "[MemoryReader] Failed to resolve NT functions.\n";
+            return false;
+        }
+
+        return true;
+    }
 
 public:
-    KM_Driver() : m_hDriver(INVALID_HANDLE_VALUE)
+    MemoryReader()
+        : m_hProcess(NULL)
+        , m_processId(0)
+        , m_connected(false)
+        , m_NtOpenProcess(nullptr)
+        , m_NtReadVirtualMemory(nullptr)
     {
-        m_hDriver = CreateFileW(
-            DOS_DEVICE_NAME,
-            GENERIC_READ | GENERIC_WRITE,
-            FILE_SHARE_READ | FILE_SHARE_WRITE,
-            NULL,
-            OPEN_EXISTING,
-            FILE_ATTRIBUTE_NORMAL,
-            NULL
+        ResolveFunctions();
+    }
+
+    ~MemoryReader()
+    {
+        Close();
+    }
+
+    MemoryReader(const MemoryReader&) = delete;
+    MemoryReader& operator=(const MemoryReader&) = delete;
+
+    // -----------------------------------------------------------------------
+    // Open — open a handle to the target process via NtOpenProcess
+    // -----------------------------------------------------------------------
+    bool Open(DWORD processId)
+    {
+        Close(); // Close any existing handle
+
+        if (!m_NtOpenProcess)
+            return false;
+
+        m_processId = processId;
+
+        OBJECT_ATTRIBUTES oa;
+        CLIENT_ID         cid;
+
+        InitializeObjectAttributes(&oa, NULL, 0, NULL, NULL);
+        cid.UniqueProcess = (HANDLE)(ULONG_PTR)processId;
+        cid.UniqueThread  = NULL;
+
+        NTSTATUS status = m_NtOpenProcess(
+            &m_hProcess,
+            PROCESS_VM_READ,
+            &oa,
+            &cid
         );
 
-        if (m_hDriver == INVALID_HANDLE_VALUE)
+        if (!NT_SUCCESS(status) || !m_hProcess)
         {
-            DWORD err = GetLastError();
-            std::cerr << "[KM_Driver] Failed to open driver handle. Error: 0x" << std::hex << err << std::dec << "\n";
-            // Don't throw — let caller check isConnected()
+            std::cerr << "[MemoryReader] NtOpenProcess failed. PID: " << processId
+                      << " Status: 0x" << std::hex << status << std::dec << "\n";
+            m_connected = false;
+            return false;
         }
-    }
 
-    ~KM_Driver()
-    {
-        if (m_hDriver != INVALID_HANDLE_VALUE)
-        {
-            CloseHandle(m_hDriver);
-            m_hDriver = INVALID_HANDLE_VALUE;
-        }
+        m_connected = true;
+        return true;
     }
-
-    KM_Driver(const KM_Driver&) = delete;
-    KM_Driver& operator=(const KM_Driver&) = delete;
 
     // -----------------------------------------------------------------------
-    // ReadMemory<T> — read a single value of type T at |address| in process |pid|
+    // Close — release the process handle
+    // -----------------------------------------------------------------------
+    void Close()
+    {
+        if (m_hProcess)
+        {
+            CloseHandle(m_hProcess);
+            m_hProcess = NULL;
+        }
+        m_connected = false;
+        m_processId = 0;
+    }
+
+    // -----------------------------------------------------------------------
+    // isConnected — check if process handle is valid
+    // -----------------------------------------------------------------------
+    bool isConnected() const
+    {
+        return m_connected && m_hProcess != NULL;
+    }
+
+    // -----------------------------------------------------------------------
+    // ReadMemory<T> — read a single value of type T from the target process
     // -----------------------------------------------------------------------
     template<typename T>
-    bool ReadMemory(HANDLE pid, uint64_t address, T& out) const
+    bool ReadMemory(uint64_t address, T& out) const
     {
-        return ReadMemoryRaw(pid, address, &out, sizeof(T));
+        return ReadMemoryRaw(address, &out, sizeof(T));
     }
 
     // -----------------------------------------------------------------------
     // ReadMemoryRaw — read raw bytes into a pre-allocated buffer
     // -----------------------------------------------------------------------
-    bool ReadMemoryRaw(HANDLE pid, uint64_t address, void* buffer, size_t size) const
+    bool ReadMemoryRaw(uint64_t address, void* buffer, size_t size) const
     {
-        MEMORY_READ_REQUEST request = { 0 };
-        request.ProcessId = pid;
-        request.Address   = address;
-        request.Size      = size;
+        if (!m_hProcess || !buffer || size == 0 || address == 0)
+            return false;
 
-        // Allocate a contiguous buffer for the request + output
-        std::vector<uint8_t> buf(sizeof(MEMORY_READ_REQUEST) + size);
-        memcpy(buf.data(), &request, sizeof(MEMORY_READ_REQUEST));
-
-        DWORD bytesReturned = 0;
-
-        BOOL success = DeviceIoControl(
-            m_hDriver,
-            IOCTL_READ_MEMORY,
-            buf.data(),
-            (DWORD)(sizeof(MEMORY_READ_REQUEST) + size),
-            buf.data() + sizeof(MEMORY_READ_REQUEST),
-            (DWORD)size,
-            &bytesReturned,
-            NULL
+        SIZE_T bytesRead = 0;
+        NTSTATUS status = m_NtReadVirtualMemory(
+            m_hProcess,
+            (PVOID)address,
+            buffer,
+            size,
+            &bytesRead
         );
 
-        if (success && bytesReturned == size)
-        {
-            memcpy(buffer, buf.data() + sizeof(MEMORY_READ_REQUEST), size);
-            return true;
-        }
-
-        return false;
+        return NT_SUCCESS(status) && bytesRead == size;
     }
 
     // -----------------------------------------------------------------------
@@ -102,51 +175,25 @@ public:
     //  reads sizeof(T) bytes from final_addr into |out|
     // -----------------------------------------------------------------------
     template<typename T>
-    bool ReadChain(HANDLE pid, uint64_t baseAddress, const std::vector<uint64_t>& offsets, T& out) const
+    bool ReadChain(uint64_t baseAddress, const std::vector<uint64_t>& offsets, T& out) const
     {
-        if (offsets.empty() || offsets.size() > MAX_CHAIN_DEPTH)
+        if (offsets.empty() || !m_hProcess)
             return false;
 
-        MEMORY_CHAIN_REQUEST request = { 0 };
-        request.ProcessId   = pid;
-        request.BaseAddress = baseAddress;
-        request.OffsetCount = (ULONG)offsets.size();
-        request.Size        = sizeof(T);
+        uint64_t currentAddress = baseAddress;
 
         for (size_t i = 0; i < offsets.size(); i++)
-            request.Offsets[i] = offsets[i];
-
-        // Build contiguous buffer
-        std::vector<uint8_t> buf(sizeof(MEMORY_CHAIN_REQUEST) + sizeof(T));
-        memcpy(buf.data(), &request, sizeof(MEMORY_CHAIN_REQUEST));
-
-        DWORD bytesReturned = 0;
-
-        BOOL success = DeviceIoControl(
-            m_hDriver,
-            IOCTL_READ_CHAIN,
-            buf.data(),
-            (DWORD)(sizeof(MEMORY_CHAIN_REQUEST) + sizeof(T)),
-            buf.data() + sizeof(MEMORY_CHAIN_REQUEST),
-            (DWORD)sizeof(T),
-            &bytesReturned,
-            NULL
-        );
-
-        if (success && bytesReturned == sizeof(T))
         {
-            memcpy(&out, buf.data() + sizeof(MEMORY_CHAIN_REQUEST), sizeof(T));
-            return true;
+            uint64_t nextAddress = 0;
+            if (!ReadMemory<uint64_t>(currentAddress + offsets[i], nextAddress))
+                return false;
+
+            if (nextAddress == 0)
+                return false;
+
+            currentAddress = nextAddress;
         }
 
-        return false;
-    }
-
-    // -----------------------------------------------------------------------
-    // isConnected — check if driver handle is valid
-    // -----------------------------------------------------------------------
-    bool isConnected() const
-    {
-        return m_hDriver != INVALID_HANDLE_VALUE;
+        return ReadMemory<T>(currentAddress, out);
     }
 };
