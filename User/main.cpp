@@ -134,41 +134,90 @@ bool ReadEntity(MemoryReader& reader, uint64_t gameBase,
     if (actorProps == 0)
         return false;
 
-    // Read entity mask (health / alive status from IEntity)
+    // Read entity mask (IEntity + 0x2E0): bit 0 = alive
     uint32_t entityMask = 0;
     if (!reader.ReadMemory<uint32_t>(
             entityAddress + bloodstrike::field::IEntity_to_entityMask,
             entityMask))
         return false;
 
-    // Typical mask: bit 0 = alive, bits for team/health
     entity.isAlive = (entityMask & 1) != 0;
-    entity.health  = (entityMask >> 8) & 0xFF;  // Example extraction
-    entity.team    = (entityMask >> 16) & 0xFF;
 
-    // Read the skeleton component from the actor
+    // Read health and team from the Actor directly (right after entityMask):
+    //   Actor + 0x2E0: entityMask (4 bytes)
+    //   Actor + 0x2E4: health (int32)
+    //   Actor + 0x2E8: team (int32)
+    int32_t healthVal = 0;
+    int32_t teamVal   = 0;
+    reader.ReadMemory<int32_t>(entityAddress + bloodstrike::field::Actor_to_health, healthVal);
+    reader.ReadMemory<int32_t>(entityAddress + bloodstrike::field::Actor_to_team, teamVal);
+
+    // Validate health (clamp to 0-100, reject garbage)
+    entity.health = std::clamp(healthVal, 0, 100);
+    entity.team   = teamVal;
+
+    // --- UNVERIFIED: Actor_to_componentsArray / Actor_to_componentsCount ---
     uint64_t componentsArray = 0;
     uint32_t componentsCount = 0;
-    if (!reader.ReadMemory<uint64_t>(entityAddress + 0x98, componentsArray))
+    if (!reader.ReadMemory<uint64_t>(entityAddress + bloodstrike::field::Actor_to_componentsArray, componentsArray))
         return false;
-    if (!reader.ReadMemory<uint32_t>(entityAddress + 0xA0, componentsCount))
+    if (!reader.ReadMemory<uint32_t>(entityAddress + bloodstrike::field::Actor_to_componentsCount, componentsCount))
         return false;
 
+    // Scan component array for the SkeletonComponent by comparing vtable
+    // against the known skeleton vtable address (gameBase + vftable offset).
     uint64_t skeletonComp = 0;
-    const int SKELETON_COMP_INDEX = 2; // Example index — adjust per game version
+    uint64_t expectedSkelVtable = gameBase + bloodstrike::vftables::Messiah__SkeletonComponent;
 
-    if (componentsArray != 0 && componentsCount > SKELETON_COMP_INDEX)
+    if (componentsArray != 0 && componentsCount > 0 && componentsCount < 64)
     {
-        reader.ReadMemory<uint64_t>(
-            componentsArray + SKELETON_COMP_INDEX * sizeof(uint64_t),
-            skeletonComp);
+        for (uint32_t i = 0; i < componentsCount; i++)
+        {
+            uint64_t compPtr = 0;
+            if (!reader.ReadMemory<uint64_t>(componentsArray + i * sizeof(uint64_t), compPtr))
+                continue;
+            if (compPtr == 0)
+                continue;
+
+            uint64_t compVtable = 0;
+            if (!reader.ReadMemory<uint64_t>(compPtr, compVtable))
+                continue;
+
+            // Match against the skeleton component vtable
+            if (compVtable == expectedSkelVtable)
+            {
+                skeletonComp = compPtr;
+                break;
+            }
+        }
     }
 
-    // If we couldn't find skeleton via components, try the pose offset directly
+    // --- UNVERIFIED: actorProps_to_pose ---
+    // Fallback #1: try the hardcoded component index (UNVERIFIED)
+    if (skeletonComp == 0 && componentsArray != 0 && componentsCount > bloodstrike::field::SKELETON_COMP_FALLBACK_INDEX)
+    {
+        reader.ReadMemory<uint64_t>(
+            componentsArray + bloodstrike::field::SKELETON_COMP_FALLBACK_INDEX * sizeof(uint64_t),
+            skeletonComp);
+
+        if (skeletonComp != 0)
+        {
+            uint64_t compVtable = 0;
+            if (reader.ReadMemory<uint64_t>(skeletonComp, compVtable) && compVtable != 0)
+            {
+                // Verify it's actually a skeleton component by checking vtable
+                uint64_t expectedSkelVtable2 = gameBase + bloodstrike::vftables::Messiah__SkeletonComponent;
+                if (compVtable != expectedSkelVtable2)
+                    skeletonComp = 0; // Wrong component, discard
+            }
+        }
+    }
+
+    // Fallback #2: try to find BipedPose (world-space bone transforms) from actorProps
     if (skeletonComp == 0)
     {
         uint64_t posePtr = 0;
-        if (reader.ReadMemory<uint64_t>(actorProps + 0x50, posePtr) && posePtr != 0)
+        if (reader.ReadMemory<uint64_t>(actorProps + bloodstrike::field::actorProps_to_pose, posePtr) && posePtr != 0)
         {
             uint64_t bipedPose = 0;
             if (reader.ReadMemory<uint64_t>(
@@ -214,11 +263,39 @@ bool ReadEntity(MemoryReader& reader, uint64_t gameBase,
         }
     }
 
-    // Head and foot positions for box ESP
+    // Head position for box ESP
     entity.headPos = entity.bonePositions[bloodstrike::BONE_HEAD];
-    entity.footPos = entity.bonePositions[bloodstrike::BONE_PELVIS];
-    // Adjust foot to be below pelvis
-    entity.footPos.y -= 40.0f;
+
+    // Foot position: use the average of both foot bones (actual ground position)
+    // instead of guessing with a magic offset from pelvis.
+    {
+        Vector3 lFoot = entity.bonePositions[bloodstrike::BONE_L_FOOT];
+        Vector3 rFoot = entity.bonePositions[bloodstrike::BONE_R_FOOT];
+
+        bool hasLFoot = (lFoot.x != 0.0f || lFoot.y != 0.0f || lFoot.z != 0.0f);
+        bool hasRFoot = (rFoot.x != 0.0f || rFoot.y != 0.0f || rFoot.z != 0.0f);
+
+        if (hasLFoot && hasRFoot)
+        {
+            // Average both feet for a stable ground position
+            entity.footPos.x = (lFoot.x + rFoot.x) * 0.5f;
+            entity.footPos.y = (lFoot.y + rFoot.y) * 0.5f;
+            entity.footPos.z = (lFoot.z + rFoot.z) * 0.5f;
+        }
+        else if (hasLFoot)
+        {
+            entity.footPos = lFoot;
+        }
+        else if (hasRFoot)
+        {
+            entity.footPos = rFoot;
+        }
+        else
+        {
+            // Fallback: pelvis position (better than a hardcoded offset)
+            entity.footPos = entity.bonePositions[bloodstrike::BONE_PELVIS];
+        }
+    }
 
     return true;
 }
@@ -244,8 +321,9 @@ bool GetCameraMatrix(MemoryReader& reader, uint64_t gameBase,
     if (!reader.ReadMemory<uint64_t>(cameraPtr, cameraVtable))
         return false;
 
+    // --- UNVERIFIED: ICamera_to_viewMatrix ---
     // Read the view-projection matrix from the camera object
-    if (!reader.ReadMemoryRaw(cameraPtr + 0x30, outMatrix.data, sizeof(float) * 16))
+    if (!reader.ReadMemoryRaw(cameraPtr + bloodstrike::field::ICamera_to_viewMatrix, outMatrix.data, sizeof(float) * 16))
         return false;
 
     // Validate matrix — reject NaN/Inf
@@ -287,9 +365,9 @@ bool GetLocalPlayer(MemoryReader& reader, uint64_t gameBase,
     if (gameplayPtr == 0)
         return false;
 
-    // The local player object (ClientPlayer) is typically at IGameplay + 0x10
+    // --- UNVERIFIED: IGameplay_to_localPlayer ---
     uint64_t localPlayerPtr = 0;
-    if (!reader.ReadMemory<uint64_t>(gameplayPtr + 0x10, localPlayerPtr))
+    if (!reader.ReadMemory<uint64_t>(gameplayPtr + bloodstrike::field::IGameplay_to_localPlayer, localPlayerPtr))
         return false;
 
     outLocalPlayer = localPlayerPtr;

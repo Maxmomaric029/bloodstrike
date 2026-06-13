@@ -167,6 +167,7 @@ namespace bloodstrike
     // ---------- Field offsets ----------
     namespace field
     {
+        // --- VERIFIED (from BloodStrike Offset Finder v2.0) ---
         constexpr uint64_t ClientEngine_to_IGameplay              = 0x58;
         constexpr uint64_t ClientPlayer_to_localActor             = 0x288;
         constexpr uint64_t ClientPlayer_to_camera                 = 0x238;
@@ -174,6 +175,16 @@ namespace bloodstrike
         constexpr uint64_t IEntity_to_entityMask                  = 0x2E0;
         constexpr uint64_t IEntity_to_IArea                       = 0x88;
         constexpr uint64_t pose_to_BipedPose                      = 0x90;
+
+        // --- UNVERIFIED — confirm each in-game with a memory scanner ---
+        constexpr uint64_t Actor_to_componentsArray               = 0x98;   // TArray<Component*>.data pointer
+        constexpr uint64_t Actor_to_componentsCount               = 0xA0;   // TArray<Component*>.count
+        constexpr uint64_t Actor_to_health                        = 0x2E4;  // int32 health (right after entityMask)
+        constexpr uint64_t Actor_to_team                          = 0x2E8;  // int32 team (right after health)
+        constexpr uint64_t ICamera_to_viewMatrix                  = 0x30;   // 4x4 view-projection matrix inside ICamera
+        constexpr uint64_t actorProps_to_pose                     = 0x50;   // Pose pointer inside ActorProperties
+        constexpr uint64_t IGameplay_to_localPlayer               = 0x10;   // ClientPlayer pointer inside IGameplay
+        constexpr int      SKELETON_COMP_FALLBACK_INDEX           = 2;      // Fallback if vtable scanning fails
     }
 
     // ---------- Entity / Actor constants ----------

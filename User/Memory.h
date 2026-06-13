@@ -1,16 +1,47 @@
 #pragma once
 
 #include <windows.h>
-#include <winternl.h>
 #include <vector>
 #include <cstdint>
 #include <string>
 #include <iostream>
 #include <cstring>
 
-// NT_SUCCESS may not be defined by all Windows SDK versions via winternl.h alone
+// ---------------------------------------------------------------------------
+// NT API types — defined manually to guarantee compilation across all
+// Windows SDK versions (winternl.h varies widely between SDK versions).
+// ---------------------------------------------------------------------------
+
 #ifndef NT_SUCCESS
 #define NT_SUCCESS(Status) (((NTSTATUS)(Status)) >= 0)
+#endif
+
+// CLIENT_ID — process/thread identifier
+typedef struct _MY_CLIENT_ID {
+    HANDLE UniqueProcess;
+    HANDLE UniqueThread;
+} MY_CLIENT_ID, *PMY_CLIENT_ID;
+
+// OBJECT_ATTRIBUTES — used by NT API functions
+typedef struct _MY_OBJECT_ATTRIBUTES {
+    ULONG           Length;
+    HANDLE          RootDirectory;
+    PUNICODE_STRING ObjectName;
+    ULONG           Attributes;
+    PVOID           SecurityDescriptor;
+    PVOID           SecurityQualityOfService;
+} MY_OBJECT_ATTRIBUTES, *PMY_OBJECT_ATTRIBUTES;
+
+#ifndef InitializeObjectAttributes
+#define InitializeObjectAttributes(p, n, a, r, s) \
+    do { \
+        (p)->Length = sizeof(MY_OBJECT_ATTRIBUTES); \
+        (p)->RootDirectory = r; \
+        (p)->Attributes = a; \
+        (p)->ObjectName = n; \
+        (p)->SecurityDescriptor = s; \
+        (p)->SecurityQualityOfService = NULL; \
+    } while (0)
 #endif
 
 // ---------------------------------------------------------------------------
@@ -25,7 +56,7 @@
 // ---------------------------------------------------------------------------
 
 // NT API function pointer types
-typedef NTSTATUS (NTAPI* pfnNtOpenProcess)(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, PCLIENT_ID);
+typedef NTSTATUS (NTAPI* pfnNtOpenProcess)(PHANDLE, ACCESS_MASK, PMY_OBJECT_ATTRIBUTES, PMY_CLIENT_ID);
 typedef NTSTATUS (NTAPI* pfnNtReadVirtualMemory)(HANDLE, PVOID, PVOID, SIZE_T, PSIZE_T);
 
 class MemoryReader
@@ -91,8 +122,8 @@ public:
 
         m_processId = processId;
 
-        OBJECT_ATTRIBUTES oa;
-        CLIENT_ID         cid;
+        MY_OBJECT_ATTRIBUTES oa;
+        MY_CLIENT_ID         cid;
 
         InitializeObjectAttributes(&oa, NULL, 0, NULL, NULL);
         cid.UniqueProcess = (HANDLE)(ULONG_PTR)processId;
