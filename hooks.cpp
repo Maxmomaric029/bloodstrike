@@ -207,7 +207,7 @@ static bool CreateDummyDevice() {
 // ============================================================
 // Install vtable hooks (replace function pointers in vtable)
 // ============================================================
-static bool InstallVTableHooks() {
+bool InstallHooks() {
     if (!g_SwapChainVTable || !oPresent || !oResizeBuffers) return false;
 
     DWORD oldProt;
@@ -255,13 +255,4 @@ static DWORD WINAPI MainThread(LPVOID hModule) {
     return 0;
 }
 
-// ============================================================
-// Entry point
-// ============================================================
-BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID) {
-    if (reason == DLL_PROCESS_ATTACH) {
-        DisableThreadLibraryCalls(hModule);
-        CreateThread(nullptr, 0, MainThread, hModule, 0, nullptr);
-    }
-    return TRUE;
-}
+
