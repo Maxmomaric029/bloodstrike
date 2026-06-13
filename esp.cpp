@@ -61,7 +61,15 @@ bool ReadEntity(uintptr_t actor, EntityInfo& info) {
     info.team    = 0;
 
     uint32_t mask = SafeRead<uint32_t>(actor + off::IEntity_to_entityMask);
-    if (mask != off::ENTITY_MASK_PLAYER) return false;
+    if (mask != off::ENTITY_MASK_PLAYER) {
+        static bool s_MaskLogged = false;
+        if (!s_MaskLogged) {
+            printf("[ESP] EntityMask at actor+0x%llX = %u (expected %u)\n",
+                   off::IEntity_to_entityMask, mask, off::ENTITY_MASK_PLAYER);
+            s_MaskLogged = true;
+        }
+        return false;
+    }
     info.alive = true;
 
     info.health = SafeRead<int>(actor + off::Actor_to_health);
@@ -191,12 +199,36 @@ void RenderESP() {
     }
     if (!localActor) { s_ChainLogged = true; return; }
 
-    // Read local entity
+    // Read local entity — try ReadEntity first, if mask fails, read manually
     EntityInfo local{};
+    local.address = localActor;
     if (!ReadEntity(localActor, local)) {
-        if (!s_ChainLogged) printf("[ESP] FAILED to read local entity (mask != 2?)\n");
-        s_ChainLogged = true;
-        return;
+        // Local actor might not have entityMask at expected offset — read it anyway
+        local.alive = true;
+        local.health = SafeRead<int>(localActor + off::Actor_to_health);
+        local.team = SafeRead<int>(localActor + off::Actor_to_team);
+        memset(local.bones, 0, sizeof(local.bones));
+        uintptr_t boneBase = 0;
+        uintptr_t p1 = ReadPtr(localActor + off::BoneStep1);
+        if (p1) {
+            uintptr_t p2 = ReadPtr(p1 + off::BoneStep2);
+            if (p2) {
+                uintptr_t p3 = ReadPtr(p2 + off::BoneStep3);
+                if (p3) {
+                    uintptr_t p4 = ReadPtr(p3 + off::BoneStep4);
+                    if (p4) {
+                        uintptr_t p5 = ReadPtr(p4 + off::BoneStep5);
+                        if (p5) boneBase = p5 + off::BoneData;
+                    }
+                }
+            }
+        }
+        if (boneBase) {
+            local.bones[6] = ReadBone(boneBase, 6);
+            local.footPos = ReadBone(boneBase, 24);
+            local.headPos = local.bones[6];
+        }
+        if (!s_ChainLogged) printf("[ESP] Local entity read manually (mask check failed but reading anyway)\n");
     }
     if (!s_ChainLogged) {
         printf("[ESP] Local entity: head=(%.1f, %.1f, %.1f)\n",

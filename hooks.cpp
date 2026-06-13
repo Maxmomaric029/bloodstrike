@@ -129,10 +129,14 @@ HRESULT __stdcall HookedPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, U
             ImGui_ImplDX11_Init(g_Device, g_Context);
             printf("[DLL] ImGui initialized.\n");
 
-            // Hook WndProc
+            // Hook WndProc — must create a message queue on this thread first
+            MSG dummyMsg;
+            PeekMessage(&dummyMsg, NULL, 0, 0, PM_NOREMOVE);  // ensures thread has message queue
+            SetLastError(0);
             g_OldWndProc = (WNDPROC)SetWindowLongPtrW(g_Hwnd, GWLP_WNDPROC, (LONG_PTR)HookWndProc);
             if (!g_OldWndProc) {
-                printf("[DLL] WARNING: SetWindowLongPtrW failed (error %lu)\n", GetLastError());
+                DWORD err = GetLastError();
+                printf("[DLL] WARNING: SetWindowLongPtrW failed (error %lu). Menu input via polling.\n", err);
             } else {
                 printf("[DLL] WndProc hooked: old=%p\n", g_OldWndProc);
             }
@@ -147,7 +151,17 @@ HRESULT __stdcall HookedPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, U
             ImGui_ImplWin32_NewFrame();
             ImGui::NewFrame();
 
-            RenderESP();
+            // Poll Insert key (works even if WndProc hook failed)
+            static bool s_InsertWasDown = false;
+            bool insertDown = (GetAsyncKeyState(VK_INSERT) & 0x8000) != 0;
+            if (insertDown && !s_InsertWasDown) ToggleMenu();
+            s_InsertWasDown = insertDown;
+
+            // Render ESP
+            if (IsESPEnabled())
+                RenderESP();
+
+            // Render menu
             RenderMenu();
 
             ImGui::Render();
