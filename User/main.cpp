@@ -206,6 +206,10 @@ bool ReadEntity(const KM_Driver& driver, HANDLE pid, uint64_t gameBase,
     if (skeletonComp == 0)
         return false;
 
+    // Zero-initialize bone positions to prevent uninitialized stack garbage
+    // if any individual bone read fails.
+    memset(entity.bonePositions, 0, sizeof(entity.bonePositions));
+
     // Read bone positions
     // Use the bone indices defined in SDK_BloodStrike.h
     const int BONES_TO_READ[] = {

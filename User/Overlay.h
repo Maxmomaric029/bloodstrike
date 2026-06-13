@@ -318,7 +318,8 @@ public:
     void AddSkeletonLine(const Vector2& from, const Vector2& to, const Color& color, float thickness = 1.5f)
     {
         // Only draw if points are valid and on screen
-        if (from.x > 0 && from.y > 0 && to.x > 0 && to.y > 0)
+        // Use >= to accept screen edge coordinates (0 is valid at top-left)
+        if (from.x >= 0 && from.y >= 0 && to.x >= 0 && to.y >= 0)
         {
             AddLine(from, to, color, thickness);
         }
