@@ -14,21 +14,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+
       - name: Download ImGui
         run: git clone --depth 1 https://github.com/ocornut/imgui.git
 
       - name: Build DLL
+        shell: cmd
         run: |
-          cl /LD dllmain.cpp hooks.cpp esp.cpp menu.cpp ^
-            imgui\imgui.cpp ^
-            imgui\imgui_draw.cpp ^
-            imgui\imgui_widgets.cpp ^
-            imgui\imgui_tables.cpp ^
-            imgui\backends\imgui_impl_dx11.cpp ^
-            imgui\backends\imgui_impl_win32.cpp ^
-            /Fe:BloodStrike.dll ^
-            /EHsc /O2 /I imgui ^
-            d3d11.lib dxgi.lib user32.lib
+          cl /LD dllmain.cpp hooks.cpp esp.cpp menu.cpp imgui\imgui.cpp imgui\imgui_draw.cpp imgui\imgui_widgets.cpp imgui\imgui_tables.cpp imgui\backends\imgui_impl_dx11.cpp imgui\backends\imgui_impl_win32.cpp /Fe:BloodStrike.dll /EHsc /O2 /I imgui d3d11.lib dxgi.lib user32.lib
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
