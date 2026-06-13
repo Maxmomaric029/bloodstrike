@@ -6,7 +6,7 @@
 #include <windows.h>
 #include <d3d11.h>
 #include <dxgi.h>
-#include <cstdint>
+#include <stdint.h>
 
 typedef HRESULT(__stdcall* PresentFn)(IDXGISwapChain*, UINT, UINT);
 typedef HRESULT(__stdcall* ResizeBuffersFn)(IDXGISwapChain*, UINT, UINT, UINT, DXGI_FORMAT, UINT);
