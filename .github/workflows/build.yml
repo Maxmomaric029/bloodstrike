@@ -1,9 +1,9 @@
 # ============================================================================
 # BloodStrike ESP — CI Build
 #
-# This workflow builds both components of the ESP system:
-#   1. Kernel Driver (.sys) — using WDK + MSBuild
-#   2. User-mode Overlay (.exe) — using CMake + MSVC
+# Two jobs in one workflow:
+#   1. Kernel Driver (.sys) — MSBuild with WDK using KernelDriver.vcxproj
+#   2. User-mode Overlay (.exe) — CMake + MSVC
 # ============================================================================
 
 name: Build BloodStrike ESP
@@ -13,66 +13,49 @@ on:
     branches: [ "main", "master" ]
   pull_request:
     branches: [ "main", "master" ]
-  workflow_dispatch:      # Allow manual trigger from Actions tab
+  workflow_dispatch:
 
 jobs:
 
   # ==========================================================================
-  # Job 1 — Kernel Driver
+  # Job 1 — Kernel Driver (BS_KernelDriver.sys)
   # ==========================================================================
   build-driver:
     name: Build Kernel Driver (.sys)
     runs-on: windows-2022
-    defaults:
-      run:
-        shell: cmd
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup MSBuild (VS 2022)
+      - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
         with:
           vs-version: '17.0'
 
-      - name: Install WDK (Windows Driver Kit)
-        run: |
-          echo "Installing WDK via Visual Studio BuildTools..."
-          # The WDK is included with Visual Studio 2022 Build Tools
-          # We verify it's available
-          dir "%ProgramFiles(x86)%\Windows Kits\10\build" 2>nul || echo "WDK not found at default path"
-          dir "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC" 2>nul || echo "Checking alternate path..."
+      - name: Setup WDK
+        uses: nuullll/setup-wdk@v1
+        with:
+          version: '10.0.22621.0'
 
-      - name: Create driver build script
+      - name: Build kernel driver using MSBuild + vcxproj
+        shell: cmd
         run: |
-          mkdir build_driver 2>nul
-          echo Creating build script for kernel driver...
-
-      - name: Build Kernel Driver (manual MSBuild approach)
-        run: |
-          echo Building BS_KernelDriver.sys...
-          cd Kernel
-          cl.exe /c /I. /I"%UniversalCRTSdkDir%Include\10.0.22621.0\km" /I"%WindowsSdkDir%Include\10.0.22621.0\km" /I"%WindowsSdkDir%Include\10.0.22621.0\shared" /I"%WindowsSdkDir%Include\10.0.22621.0\um" /D"DRIVER" /D"_AMD64_" /D"_WIN32_WINNT=0x0A00" /GS- /W4 /WX- /Gy /Gm- /O2 /Oi /Oy /GL /Z7 /arch:AVX2 /nologo driver.c /Fo..\build_driver\driver.obj
-          link.exe driver.obj /OUT:..\build_driver\BS_KernelDriver.sys /MANIFEST:NO /DEBUG /DRIVER /SUBSYSTEM:NATIVE /OPT:REF /OPT:ICF /LTCG /MACHINE:X64 /ENTRY:DriverEntry /NOLOGO /LIBPATH:"%UniversalCRTSdkDir%Lib\10.0.22621.0\km\x64" /LIBPATH:"%WindowsSdkDir%Lib\10.0.22621.0\km\x64" ntoskrnl.lib hal.lib
-          cd ..
+          msbuild Kernel\KernelDriver.vcxproj /p:Configuration=Release /p:Platform=x64 /p:OutDir=..\build_driver\ /t:Build /p:UseEnv=true
 
       - name: Upload Kernel Driver artifact
         uses: actions/upload-artifact@v4
         with:
           name: BS_KernelDriver
           path: build_driver/BS_KernelDriver.sys
-          if-no-files-found: warn
+          if-no-files-found: error
 
   # ==========================================================================
-  # Job 2 — User-mode ESP Overlay
+  # Job 2 — User-mode ESP Overlay (BloodStrikeESP.exe)
   # ==========================================================================
   build-exe:
-    name: Build User-mode ESP (.exe)
+    name: Build User ESP (.exe)
     runs-on: windows-2022
-    defaults:
-      run:
-        shell: cmd
 
     steps:
       - name: Checkout repository
@@ -81,34 +64,26 @@ jobs:
       - name: Setup CMake
         uses: lukka/get-cmake@latest
 
-      - name: Setup Visual Studio Developer Command Prompt
+      - name: Setup Visual Studio dev environment
         uses: microsoft/setup-msbuild@v2
         with:
           vs-version: '17.0'
 
-      - name: Configure CMake (x64)
+      - name: Configure CMake (x64 Release)
+        shell: cmd
         run: |
           call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
-          cmake -B build_exe -A x64 -DCMAKE_BUILD_TYPE=Release
-        shell: cmd
+          cmake -B build_exe -A x64 .
 
-      - name: Build executable
-        run: |
-          cmake --build build_exe --config Release --verbose
+      - name: Build EXE
         shell: cmd
-        continue-on-error: true
-
-      - name: Find built exe
         run: |
-          echo "=== Looking for built EXE ==="
-          dir /s build_exe\Release\*.exe 2>nul || echo "No exe found in build_exe/Release"
-          dir /s build_exe\*.exe 2>nul || echo "No exe found anywhere in build_exe"
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+          cmake --build build_exe --config Release
 
       - name: Upload ESP Overlay artifact
         uses: actions/upload-artifact@v4
         with:
           name: BloodStrikeESP
-          path: |
-            build_exe/Release/BloodStrikeESP.exe
-            build_exe/**/BloodStrikeESP.exe
-          if-no-files-found: warn
+          path: build_exe/Release/BloodStrikeESP.exe
+          if-no-files-found: error

@@ -389,6 +389,16 @@ void ESPLoop(const KM_Driver& driver, HANDLE pid, uint64_t gameBase,
             lastFrameTime = now;
         }
 
+        // ---- Poll Insert key to toggle global visibility ----
+        // (The overlay window cannot receive keyboard focus, so we poll globally)
+        {
+            static bool s_insertWasDown = false;
+            bool isDown = (GetAsyncKeyState(VK_INSERT) & 0x8000) != 0;
+            if (isDown && !s_insertWasDown)
+                overlay.Toggles().visible = !overlay.Toggles().visible;
+            s_insertWasDown = isDown;
+        }
+
         // ---- Re-read local player position each frame for accurate distances ----
         EntityInfo updatedLocal;
         if (ReadEntity(driver, pid, gameBase, localActor, updatedLocal, true))

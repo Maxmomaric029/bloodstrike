@@ -381,18 +381,10 @@ private:
         case WM_NCHITTEST:
             return HTTRANSPARENT; // Pass all mouse input through the overlay
 
-        case WM_KEYDOWN:
-            if (pThis && wParam == VK_INSERT)
-            {
-                pThis->m_toggles.visible = !pThis->m_toggles.visible;
-                return 0;
-            }
-            break;
-
         default:
             return DefWindowProcW(hWnd, msg, wParam, lParam);
         }
-        return DefWindowProcW(hWnd, msg, wParam, lParam);
+        return 0;
     }
 
     // -----------------------------------------------------------------------
