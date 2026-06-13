@@ -21,15 +21,17 @@ if %errorlevel% equ 0 (
 )
 
 rem ----------------------------------------------------------
-rem Check if WDK headers are available
+rem Check if WDK headers are available (pick newest SDK)
 rem ----------------------------------------------------------
 set WDK_FOUND=0
 for /f "tokens=*" %%i in ('dir /b /o-n "%ProgramFiles(x86)%\Windows Kits\10\Include\10.0.*" 2^>nul') do (
     if exist "%ProgramFiles(x86)%\Windows Kits\10\Include\%%i\km\ntddk.h" (
         set WDK_FOUND=1
         set SDK_VER=%%i
+        goto :wdk_checked
     )
 )
+:wdk_checked
 
 if %WDK_FOUND% equ 1 (
     echo [OK] WDK encontrado (SDK %SDK_VER%^)
@@ -76,13 +78,15 @@ if %WDK_FOUND% equ 0 (
         exit /b 1
     )
     
-    rem Re-check for WDK headers after install
+    rem Re-check for WDK headers after install (pick newest SDK)
     for /f "tokens=*" %%i in ('dir /b /o-n "%ProgramFiles(x86)%\Windows Kits\10\Include\10.0.*" 2^>nul') do (
         if exist "%ProgramFiles(x86)%\Windows Kits\10\Include\%%i\km\ntddk.h" (
             set WDK_FOUND=1
             set SDK_VER=%%i
+            goto :wdk_rechecked
         )
     )
+    :wdk_rechecked
     echo [OK] WDK instalado (SDK %SDK_VER%^).
     echo.
 )
