@@ -145,19 +145,24 @@ public:
         if (m_screenWidth <= 0 || m_screenHeight <= 0)
             return false;
 
-        // Register window class
+        // Register window class (once only)
         const wchar_t CLASS_NAME[] = L"BloodStrikeESP_Overlay";
 
-        WNDCLASSEXW wc = { 0 };
-        wc.cbSize        = sizeof(WNDCLASSEXW);
-        wc.style         = CS_HREDRAW | CS_VREDRAW;
-        wc.lpfnWndProc   = WndProc;
-        wc.hInstance     = m_hInstance;
-        wc.hCursor       = LoadCursor(NULL, IDC_ARROW);
-        wc.hbrBackground = (HBRUSH)CreateSolidBrush(RGB(0, 0, 0));
-        wc.lpszClassName = CLASS_NAME;
+        static bool s_classRegistered = false;
+        if (!s_classRegistered)
+        {
+            WNDCLASSEXW wc = { 0 };
+            wc.cbSize        = sizeof(WNDCLASSEXW);
+            wc.style         = CS_HREDRAW | CS_VREDRAW;
+            wc.lpfnWndProc   = WndProc;
+            wc.hInstance     = m_hInstance;
+            wc.hCursor       = LoadCursor(NULL, IDC_ARROW);
+            wc.hbrBackground = (HBRUSH)CreateSolidBrush(RGB(0, 0, 0));
+            wc.lpszClassName = CLASS_NAME;
 
-        RegisterClassExW(&wc);
+            RegisterClassExW(&wc);
+            s_classRegistered = true;
+        }
 
         // Create overlay window
         // WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST | WS_EX_NOACTIVATE
@@ -407,9 +412,29 @@ private:
 
         if (newWidth != m_screenWidth || newHeight != m_screenHeight)
         {
+            // Save old state in case resize fails
+            int oldWidth  = m_screenWidth;
+            int oldHeight = m_screenHeight;
+            auto oldRTV   = m_renderTargetView;
+            auto oldRT    = m_d2dRenderTarget;
+            auto oldBrush = m_d2dBrush;
+
+            m_renderTargetView.Reset();
+            m_d2dRenderTarget.Reset();
+            m_d2dBrush.Reset();
+
             m_screenWidth  = newWidth;
             m_screenHeight = newHeight;
-            ResizeSwapChain();
+
+            if (!ResizeSwapChain())
+            {
+                // Restore old state on failure (skip resize instead of crashing)
+                m_renderTargetView = oldRTV;
+                m_d2dRenderTarget  = oldRT;
+                m_d2dBrush         = oldBrush;
+                m_screenWidth      = oldWidth;
+                m_screenHeight     = oldHeight;
+            }
         }
 
         SetWindowPos(m_hWnd, HWND_TOPMOST,
@@ -533,32 +558,47 @@ private:
 
     // -----------------------------------------------------------------------
     // Resize swap chain when window size changes
+    // Returns true on success, false on failure (caller must restore old state)
     // -----------------------------------------------------------------------
-    void ResizeSwapChain()
+    bool ResizeSwapChain()
     {
         if (!m_swapChain || !m_d3dDevice)
-            return;
+            return false;
 
+        // Release old resources
         m_renderTargetView.Reset();
         m_d2dRenderTarget.Reset();
 
-        m_swapChain->ResizeBuffers(0, m_screenWidth, m_screenHeight, DXGI_FORMAT_UNKNOWN, 0);
+        HRESULT hr = m_swapChain->ResizeBuffers(0, m_screenWidth, m_screenHeight, DXGI_FORMAT_UNKNOWN, 0);
+        if (FAILED(hr))
+            return false;
 
         ComPtr<ID3D11Texture2D> backBuffer;
-        m_swapChain->GetBuffer(0, IID_PPV_ARGS(&backBuffer));
-        m_d3dDevice->CreateRenderTargetView(backBuffer.Get(), NULL, &m_renderTargetView);
+        hr = m_swapChain->GetBuffer(0, IID_PPV_ARGS(&backBuffer));
+        if (FAILED(hr))
+            return false;
+
+        hr = m_d3dDevice->CreateRenderTargetView(backBuffer.Get(), NULL, &m_renderTargetView);
+        if (FAILED(hr))
+            return false;
 
         // Recreate D2D render target
         ComPtr<IDXGISurface> dxgiSurface;
-        m_swapChain->GetBuffer(0, IID_PPV_ARGS(&dxgiSurface));
+        hr = m_swapChain->GetBuffer(0, IID_PPV_ARGS(&dxgiSurface));
+        if (FAILED(hr))
+            return false;
 
         D2D1_RENDER_TARGET_PROPERTIES props = D2D1::RenderTargetProperties(
             D2D1_RENDER_TARGET_TYPE_DEFAULT,
             D2D1::PixelFormat(DXGI_FORMAT_R8G8B8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED)
         );
 
-        m_d2dFactory->CreateDxgiSurfaceRenderTarget(dxgiSurface.Get(), props, &m_d2dRenderTarget);
-        m_d2dRenderTarget->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::White), &m_d2dBrush);
+        hr = m_d2dFactory->CreateDxgiSurfaceRenderTarget(dxgiSurface.Get(), props, &m_d2dRenderTarget);
+        if (FAILED(hr))
+            return false;
+
+        hr = m_d2dRenderTarget->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::White), &m_d2dBrush);
+        return SUCCEEDED(hr);
     }
 
     // -----------------------------------------------------------------------

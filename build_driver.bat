@@ -8,6 +8,17 @@ echo ============================================
 echo.
 
 rem ----------------------------------------------------------
+rem Check if winget is available
+rem ----------------------------------------------------------
+where winget.exe >nul 2>&1
+if %errorlevel% neq 0 (
+    echo [ERROR] winget no esta disponible en este sistema.
+    echo Instala manualmente https://aka.ms/getwinget
+    pause
+    exit /b 1
+)
+
+rem ----------------------------------------------------------
 rem Check if cl.exe is already available
 rem ----------------------------------------------------------
 where cl.exe >nul 2>&1

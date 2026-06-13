@@ -18,6 +18,7 @@
 #include <iomanip>
 #include <sstream>
 #include <algorithm>
+#include <cmath>
 
 #include "Memory.h"
 #include "SDK_BloodStrike.h"
@@ -276,6 +277,13 @@ bool GetCameraMatrix(const KM_Driver& driver, HANDLE pid, uint64_t gameBase,
     if (!driver.ReadMemoryRaw(pid, cameraPtr + 0x30, outMatrix.data, sizeof(float) * 16))
         return false;
 
+    // Validate matrix — reject NaN/Inf which would corrupt all W2S calculations
+    for (int i = 0; i < 16; i++)
+    {
+        if (!std::isfinite(outMatrix.data[i]))
+            return false;
+    }
+
     return true;
 }
 
@@ -397,6 +405,19 @@ void ESPLoop(const KM_Driver& driver, HANDLE pid, uint64_t gameBase,
             if (isDown && !s_insertWasDown)
                 overlay.Toggles().visible = !overlay.Toggles().visible;
             s_insertWasDown = isDown;
+        }
+
+        // ---- Re-read local actor address (may change on respawn) ----
+        {
+            uint64_t currentLocalActor = 0;
+            driver.ReadMemory<uint64_t>(pid,
+                localPlayer + bloodstrike::field::ClientPlayer_to_localActor,
+                currentLocalActor);
+            if (currentLocalActor != 0 && currentLocalActor != localActor)
+            {
+                localActor = currentLocalActor;
+                ReadEntity(driver, pid, gameBase, localActor, localEntity, true);
+            }
         }
 
         // ---- Re-read local player position each frame for accurate distances ----

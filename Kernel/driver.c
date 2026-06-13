@@ -295,9 +295,6 @@ DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
         return status;
     }
 
-    // Ensure the device is only accessible from usermode with appropriate rights
-    g_DeviceObject->Flags |= DO_DIRECT_IO;
-
     DbgPrint("[BS_Driver] Driver loaded successfully.\n");
     DbgPrint("[BS_Driver] Device: %wZ  Symlink: %wZ\n", &g_DeviceName, &g_SymlinkName);
 

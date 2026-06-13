@@ -34,7 +34,7 @@ public:
         {
             DWORD err = GetLastError();
             std::cerr << "[KM_Driver] Failed to open driver handle. Error: 0x" << std::hex << err << std::dec << "\n";
-            throw std::runtime_error("Cannot open driver handle");
+            // Don't throw — let caller check isConnected()
         }
     }
 
