@@ -96,7 +96,7 @@ cmake --build build --config Release
 
 ```powershell
 cd Kernel
-cl.exe /c /I. driver.c /LD
+cl.exe /c /I. driver.c
 link.exe driver.obj /DRIVER /OUT:BS_KernelDriver.sys /SUBSYSTEM:NATIVE
 ```
 

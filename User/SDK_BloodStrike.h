@@ -288,7 +288,7 @@ namespace sdk
     {
         float raw[12];
         if (!driver.ReadMemoryRaw(pid, matrixAddress, raw, sizeof(raw)))
-            return localPos;
+            return Vector3(0, 0, 0);
 
         // Reconstruct row-major 4x4 from Messiah 4x3 layout:
         // raw layout: [r00, r01, r02, tx,  r10, r11, r12, ty,  r20, r21, r22, tz]

@@ -57,7 +57,7 @@ add_custom_target(KernelDriverSource
     COMMAND ${CMAKE_COMMAND} -E echo ""
     COMMAND ${CMAKE_COMMAND} -E echo "  Or from the command line:"
     COMMAND ${CMAKE_COMMAND} -E echo "    cd Kernel"
-    COMMAND ${CMAKE_COMMAND} -E echo "    cl.exe /c /I. driver.c /LD"
+    COMMAND ${CMAKE_COMMAND} -E echo "    cl.exe /c /I. driver.c"
     COMMAND ${CMAKE_COMMAND} -E echo "    link.exe driver.obj /DRIVER /OUT:BS_KernelDriver.sys"
     COMMAND ${CMAKE_COMMAND} -E echo ""
 )
