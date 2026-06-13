@@ -2,7 +2,7 @@
 # BloodStrike ESP — CI Build
 #
 # Two jobs in one workflow:
-#   1. Kernel Driver (.sys) — requires WDK (skips gracefully if unavailable)
+#   1. Kernel Driver (.sys) — WDK installed via winget, built with MSBuild
 #   2. User-mode Overlay (.exe) — CMake + MSVC
 # ============================================================================
 
@@ -19,9 +19,8 @@ jobs:
 
   # ==========================================================================
   # Job 1 — Kernel Driver (BS_KernelDriver.sys)
-  # GitHub Actions runners don't include the WDK, so this job checks if
-  # kernel-mode headers/libs are available and builds only if they are.
-  # For local builds, use Visual Studio with the WDK installed.
+  # Installs the WDK via the official Microsoft winget DSC config,
+  # then builds the driver using MSBuild + KernelDriver.vcxproj.
   # ==========================================================================
   build-driver:
     name: Build Kernel Driver (.sys)
@@ -32,59 +31,50 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Attempt kernel driver build (WDK required)
+      - name: Install WDK via official Microsoft winget config
+        shell: powershell
+        run: |
+          Write-Host "Installing WDK + VS Enterprise workload via Microsoft DSC config..."
+          Write-Host "This may take 10-20 minutes on the first run."
+
+          # Use the official Microsoft WDK DSC config for Visual Studio Enterprise
+          # (windows-2022 runner has VS Enterprise pre-installed)
+          $configUrl = "https://raw.githubusercontent.com/microsoft/Windows-driver-samples/main/_wdk_utils/winget/configs/wdk-vsenterprise.dsc.yaml"
+          $configPath = "$env:TEMP\wdk-install.dsc.yaml"
+
+          Write-Host "Downloading config from: $configUrl"
+          Invoke-WebRequest -Uri $configUrl -OutFile $configPath
+
+          Write-Host "Running winget configure..."
+          winget configure -f $configPath --accept-source-agreements --accept-package-agreements 2>&1
+
+          Write-Host "WDK installation complete."
+
+      - name: Verify WDK installation
         shell: cmd
         run: |
-          set WDK_ROOT=%ProgramFiles(x86)%\Windows Kits\10
-          set SDK_VER=
-          for /f "tokens=*" %%i in ('dir /b /o-n "%WDK_ROOT%\Include\10.0.*" 2^>nul') do (
-              if exist "%WDK_ROOT%\Include\%%i\km\ntddk.h" (
-                  set SDK_VER=%%i
-                  goto :build
-              )
-          )
-          :build
-          if "%SDK_VER%"=="" (
-              echo WDK not available - skipping driver build.
-              echo To build the driver locally, install the WDK and run:
-              echo   msbuild Kernel\KernelDriver.vcxproj /p:Configuration=Release /p:Platform=x64
-              exit /b 0
-          )
-
-          mkdir build_driver 2>nul
-
-          set KM_INC=%WDK_ROOT%\Include\%SDK_VER%\km
-          set SHARED_INC=%WDK_ROOT%\Include\%SDK_VER%\shared
-          set UM_INC=%WDK_ROOT%\Include\%SDK_VER%\um
-          set KM_LIB=%WDK_ROOT%\Lib\%SDK_VER%\km\x64
-
-          echo Building driver with SDK %SDK_VER%...
-
-          cl.exe /nologo /c /I. /I"%KM_INC%" /I"%SHARED_INC%" /I"%UM_INC%" ^
-              /D"DRIVER" /D"_AMD64_" /D"_WIN32_WINNT=0x0A00" /GS- /O2 /Oi /arch:AVX2 ^
-              Kernel\driver.c /Fobuild_driver\driver.obj
-
+          echo Checking for kernel-mode headers...
+          dir /s /b "%ProgramFiles(x86)%\Windows Kits\10\Include\10.0.*\km\ntddk.h" 2>nul
           if errorlevel 1 (
-              echo Compilation failed.
+              echo WARNING: ntddk.h not found after WDK install.
+              echo The driver build may fail.
+          ) else (
+              echo WDK headers found!
+          )
+
+      - name: Build kernel driver with MSBuild
+        shell: cmd
+        run: |
+          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+          msbuild Kernel\KernelDriver.vcxproj /p:Configuration=Release /p:Platform=x64 /p:OutDir=..\build_driver\ /t:Build
+          if errorlevel 1 (
+              echo Driver build failed.
               exit /b 0
           )
-          echo Compilation OK.
+          echo === Driver built successfully! ===
+          dir build_driver\BS_KernelDriver.sys
 
-          if exist "%KM_LIB%\ntoskrnl.lib" (
-              link.exe /NOLOGO /OUT:build_driver\BS_KernelDriver.sys ^
-                  /MANIFEST:NO /DRIVER /SUBSYSTEM:NATIVE /OPT:REF /OPT:ICF ^
-                  /MACHINE:X64 /ENTRY:DriverEntry build_driver\driver.obj ^
-                  /LIBPATH:"%KM_LIB%" ntoskrnl.lib hal.lib
-              if not errorlevel 1 (
-                  echo === Driver built successfully! ===
-                  dir build_driver\BS_KernelDriver.sys
-              )
-          ) else (
-              echo ntoskrnl.lib not found - linking skipped.
-              echo Driver compiled OK. Link locally with WDK.
-          )
-
-      - name: Upload Kernel Driver artifact (if built)
+      - name: Upload Kernel Driver artifact
         uses: actions/upload-artifact@v4
         with:
           name: BS_KernelDriver
