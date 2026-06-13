@@ -35,7 +35,7 @@ namespace off
     constexpr uintptr_t pose_to_BipedPose            = 0x90;
 
     // --- Entity list (circular linked list) ---
-    constexpr uintptr_t EntityList_to_head           = 0x8;   // head = *(EntityList) + 0x8
+    constexpr uintptr_t EntityList_to_head           = 0x8;   // head = ReadPtr(base+EntityList) + 0x8 (ADD, not deref)
     constexpr uintptr_t EntityNode_to_actor          = 0x18;  // actor = *(node + 0x18)
     constexpr uintptr_t EntityNode_to_next           = 0x0;   // next = *(node)
 

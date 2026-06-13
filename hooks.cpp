@@ -1,5 +1,5 @@
 // ============================================================
-// hooks.cpp — DX11 vtable hook (safe, no function patching)
+// hooks.cpp — DX11 vtable hook with verbose debug logging
 // ============================================================
 
 #define WIN32_LEAN_AND_MEAN
@@ -36,7 +36,6 @@ bool                    g_Initialized = false;
 static WNDPROC g_OldWndProc = nullptr;
 static void**  g_SwapChainVTable = nullptr;
 
-
 // ============================================================
 // RTV management
 // ============================================================
@@ -51,18 +50,29 @@ static void CreateRTV() {
 }
 
 // ============================================================
-// WndProc hook
+// WndProc hook — must forward ALL input to ImGui
 // ============================================================
 static LRESULT __stdcall HookWndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
-    if (IsMenuOpen() && ImGui_ImplWin32_WndProcHandler(h, m, w, l))
-        return 1;
-    if (m == WM_KEYDOWN && w == VK_INSERT)
+    // Always forward input to ImGui when menu is open
+    if (IsMenuOpen()) {
+        if (ImGui_ImplWin32_WndProcHandler(h, m, w, l))
+            return 0;  // ImGui consumed this input
+    }
+
+    // Insert key toggles menu
+    if (m == WM_KEYDOWN && w == VK_INSERT) {
         ToggleMenu();
-    return CallWindowProcW(g_OldWndProc, h, m, w, l);
+        return 0;
+    }
+
+    // Forward everything else to original WndProc
+    if (g_OldWndProc)
+        return CallWindowProcW(g_OldWndProc, h, m, w, l);
+    return DefWindowProcW(h, m, w, l);
 }
 
 // ============================================================
-// Present Hook (safe — no trampoline, calls oPresent directly)
+// Present Hook
 // ============================================================
 HRESULT __stdcall HookedPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT Flags) {
     __try {
@@ -74,14 +84,22 @@ HRESULT __stdcall HookedPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, U
 
             // Find game window
             DWORD pid = GetCurrentProcessId();
-            struct Ctx { DWORD pid; HWND out; } ctx = { pid, nullptr };
+            g_Hwnd = nullptr;
             EnumWindows([](HWND h, LPARAM lp) -> BOOL {
-                auto& c = *(Ctx*)lp;
-                DWORD wpid; GetWindowThreadProcessId(h, &wpid);
-                if (wpid == c.pid && IsWindowVisible(h)) { c.out = h; return FALSE; }
+                DWORD wpid;
+                GetWindowThreadProcessId(h, &wpid);
+                if (wpid == (DWORD)lp && IsWindowVisible(h)) {
+                    g_Hwnd = h;
+                    return FALSE;
+                }
                 return TRUE;
-            }, (LPARAM)&ctx);
-            g_Hwnd = ctx.out;
+            }, (LPARAM)pid);
+
+            if (!g_Hwnd) {
+                printf("[DLL] ERROR: Could not find game window!\n");
+                return oPresent(pSwapChain, SyncInterval, Flags);
+            }
+            printf("[DLL] Game window: 0x%p\n", g_Hwnd);
 
             // Init ImGui
             IMGUI_CHECKVERSION();
@@ -91,29 +109,35 @@ HRESULT __stdcall HookedPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, U
             ImGui::StyleColorsDark();
             ImGui_ImplWin32_Init(g_Hwnd);
             ImGui_ImplDX11_Init(g_Device, g_Context);
+            printf("[DLL] ImGui initialized.\n");
 
             // Hook WndProc
             g_OldWndProc = (WNDPROC)SetWindowLongPtrW(g_Hwnd, GWLP_WNDPROC, (LONG_PTR)HookWndProc);
+            if (!g_OldWndProc) {
+                printf("[DLL] WARNING: SetWindowLongPtrW failed (error %lu)\n", GetLastError());
+            } else {
+                printf("[DLL] WndProc hooked: old=0x%p\n", g_OldWndProc);
+            }
 
             g_Initialized = true;
-            printf("[DLL] Initialized on HWND 0x%p\n", g_Hwnd);
+            printf("[DLL] ===== READY =====\n");
         }
 
         ImGui_ImplDX11_NewFrame();
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
 
-        if (IsESPEnabled()) {
-            RenderESP();
-        }
+        // Render ESP
+        RenderESP();
 
+        // Render menu
         RenderMenu();
 
         ImGui::Render();
         g_Context->OMSetRenderTargets(1, &g_RTV, nullptr);
         ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
     } __except(EXCEPTION_EXECUTE_HANDLER) {
-        printf("[DLL] Exception in HookedPresent: 0x%08X\n", GetExceptionCode());
+        printf("[DLL] EXCEPTION in HookedPresent: 0x%08X\n", GetExceptionCode());
     }
 
     return oPresent(pSwapChain, SyncInterval, Flags);
@@ -126,13 +150,8 @@ HRESULT __stdcall HookedResizeBuffers(IDXGISwapChain* pSwapChain, UINT b, UINT w
     __try {
         if (g_RTV) { g_RTV->Release(); g_RTV = nullptr; }
     } __except(EXCEPTION_EXECUTE_HANDLER) {}
-
     HRESULT hr = oResizeBuffers(pSwapChain, b, w, h, f, flags);
-
-    __try {
-        CreateRTV();
-    } __except(EXCEPTION_EXECUTE_HANDLER) {}
-
+    __try { CreateRTV(); } __except(EXCEPTION_EXECUTE_HANDLER) {}
     return hr;
 }
 
@@ -170,18 +189,17 @@ bool CreateDummyDevice() {
         D3D11_SDK_VERSION, &sd, &sc, &dev, &fl, &ctx);
 
     if (FAILED(hr)) {
-        printf("[DLL] Failed to create dummy device: 0x%08X\n", hr);
+        printf("[DLL] Dummy device failed: 0x%08X\n", hr);
         DestroyWindow(hDummy);
         UnregisterClassA("DX11Dummy", wc.hInstance);
         return false;
     }
 
-    // Get vtable — this is SHARED by all swap chains in the process
     g_SwapChainVTable = *(void***)sc;
     oPresent       = (PresentFn)g_SwapChainVTable[8];
     oResizeBuffers = (ResizeBuffersFn)g_SwapChainVTable[13];
 
-    printf("[DLL] VTable: %p, Present: %p, ResizeBuffers: %p\n",
+    printf("[DLL] VTable=%p  Present=%p  ResizeBuffers=%p\n",
            g_SwapChainVTable, oPresent, oResizeBuffers);
 
     sc->Release();
@@ -193,19 +211,16 @@ bool CreateDummyDevice() {
 }
 
 // ============================================================
-// Install vtable hooks (replace function pointers in vtable)
+// Install vtable hooks
 // ============================================================
 bool InstallHooks() {
     if (!g_SwapChainVTable || !oPresent || !oResizeBuffers) return false;
-
     DWORD oldProt;
 
-    // Hook Present (index 8)
     VirtualProtect(&g_SwapChainVTable[8], sizeof(void*), PAGE_READWRITE, &oldProt);
     g_SwapChainVTable[8] = (void*)HookedPresent;
     VirtualProtect(&g_SwapChainVTable[8], sizeof(void*), oldProt, &oldProt);
 
-    // Hook ResizeBuffers (index 13)
     VirtualProtect(&g_SwapChainVTable[13], sizeof(void*), PAGE_READWRITE, &oldProt);
     g_SwapChainVTable[13] = (void*)HookedResizeBuffers;
     VirtualProtect(&g_SwapChainVTable[13], sizeof(void*), oldProt, &oldProt);
@@ -213,5 +228,3 @@ bool InstallHooks() {
     printf("[DLL] VTable hooks installed.\n");
     return true;
 }
-
-
