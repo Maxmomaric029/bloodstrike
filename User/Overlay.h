@@ -617,7 +617,7 @@ private:
 
     void DrawTextInternal(const Text2D& text)
     {
-        if (!m_d2dRenderTarget || !m_d2dBrush || !m_dwriteTextFormat)
+        if (!m_d2dRenderTarget || !m_d2dBrush || !m_dwriteFactory || !m_dwriteTextFormat)
             return;
 
         m_d2dBrush->SetColor(D2D1::ColorF(
@@ -627,21 +627,27 @@ private:
             text.color.a / 255.0f
         ));
 
-        D2D1_RECT_F rect = D2D1::RectF(
-            text.position.x, text.position.y,
-            text.position.x + 500.0f,  // Wide enough for most text
-            text.position.y + 100.0f
-        );
-
-        m_d2dRenderTarget->DrawTextW(
+        // Create an IDWriteTextLayout for this specific text.
+        // This avoids the fragile DrawTextW signature that varies across SDK versions.
+        ComPtr<IDWriteTextLayout> textLayout;
+        HRESULT hr = m_dwriteFactory->CreateTextLayout(
             text.text.c_str(),
             (UINT32)text.text.length(),
             m_dwriteTextFormat.Get(),
-            &rect,
-            m_d2dBrush.Get(),
-            D2D1_DRAW_TEXT_OPTIONS_NONE,
-            DWRITE_MEASURING_MODE_NATURAL
+            500.0f,  // Max width
+            100.0f,  // Max height
+            &textLayout
         );
+
+        if (SUCCEEDED(hr) && textLayout)
+        {
+            m_d2dRenderTarget->DrawTextLayout(
+                D2D1::Point2F(text.position.x, text.position.y),
+                textLayout.Get(),
+                m_d2dBrush.Get(),
+                D2D1_DRAW_TEXT_OPTIONS_NONE
+            );
+        }
     }
 
     // -----------------------------------------------------------------------

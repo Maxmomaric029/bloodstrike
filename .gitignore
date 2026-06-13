@@ -22,8 +22,12 @@ Debug/
 # Visual Studio
 .vs/
 *.sln
-*.vcxproj
+build_exe/*.vcxproj
+build_driver/*.vcxproj
 *.vcxproj.user
+
+# Except our manually crafted kernel driver project
+!Kernel/KernelDriver.vcxproj
 
 # CMake
 CMakeCache.txt
