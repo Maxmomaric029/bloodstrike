@@ -620,10 +620,6 @@ private:
         if (!m_d2dRenderTarget || !m_d2dBrush || !m_dwriteTextFormat)
             return;
 
-        // Update text size if needed
-        // (We cache the size and recreate format on change in SetTextSize)
-        m_dwriteTextFormat->SetFontSize(text.size);
-
         m_d2dBrush->SetColor(D2D1::ColorF(
             text.color.r / 255.0f,
             text.color.g / 255.0f,
@@ -641,8 +637,10 @@ private:
             text.text.c_str(),
             (UINT32)text.text.length(),
             m_dwriteTextFormat.Get(),
-            rect,
-            m_d2dBrush.Get()
+            &rect,
+            m_d2dBrush.Get(),
+            D2D1_DRAW_TEXT_OPTIONS_NONE,
+            DWRITE_MEASURING_MODE_NATURAL
         );
     }
 

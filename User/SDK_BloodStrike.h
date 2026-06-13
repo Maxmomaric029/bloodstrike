@@ -108,13 +108,14 @@ struct Matrix4x4
 
 
 // ---------------------------------------------------------------------------
-// Color helper
+// Color helper (constexpr for use with constexpr color constants)
 // ---------------------------------------------------------------------------
 struct Color
 {
     uint8_t r, g, b, a;
-    Color() : r(255), g(255), b(255), a(255) {}
-    Color(uint8_t _r, uint8_t _g, uint8_t _b, uint8_t _a = 255)
+
+    constexpr Color() : r(255), g(255), b(255), a(255) {}
+    constexpr Color(uint8_t _r, uint8_t _g, uint8_t _b, uint8_t _a = 255)
         : r(_r), g(_g), b(_b), a(_a) {}
 };
 

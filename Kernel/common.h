@@ -1,6 +1,18 @@
 #ifndef COMMON_H
 #define COMMON_H
 
+// ------------------------------------------------------------
+// This header is shared between the kernel driver (included
+// via ntddk.h) and the usermode app (included via windows.h).
+// We include the right header for CTL_CODE() depending on
+// context, so that this file is self-contained.
+// ------------------------------------------------------------
+#ifdef _NTDDK_
+    // Already included via ntddk.h in the kernel driver
+#elif defined(_WIN32)
+    #include <winioctl.h>   // For CTL_CODE in user mode
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif

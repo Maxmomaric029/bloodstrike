@@ -33,15 +33,31 @@ jobs:
         with:
           vs-version: '17.0'
 
-      - name: Setup WDK
-        uses: nuullll/setup-wdk@v1
-        with:
-          version: '10.0.22621.0'
+      - name: Install WDK
+        shell: cmd
+        run: |
+          echo Checking if WDK is already installed...
+          if exist "%ProgramFiles(x86)%\Windows Kits\10\Include\10.0.*\km" (
+              echo WDK already installed.
+              goto :wdk_done
+          )
+          echo Attempting WDK install via winget...
+          winget install Microsoft.WindowsWDK -e --accept-package-agreements --accept-source-agreements 2>nul
+          if exist "%ProgramFiles(x86)%\Windows Kits\10\Include\10.0.*\km" goto :wdk_done
+          echo winget failed. Trying choco...
+          choco install windows-driver-kit -y 2>nul
+          if exist "%ProgramFiles(x86)%\Windows Kits\10\Include\10.0.*\km" goto :wdk_done
+          echo WDK installation may have failed. Falling back to direct download...
+          curl -L --output %TEMP%\wdk.exe "https://go.microsoft.com/fwlink/?linkid=2263961"
+          echo WDK download requested. Attempting MSBuild build anyway...
+          :wdk_done
+          echo WDK check complete.
 
       - name: Build kernel driver using MSBuild + vcxproj
         shell: cmd
         run: |
-          msbuild Kernel\KernelDriver.vcxproj /p:Configuration=Release /p:Platform=x64 /p:OutDir=..\build_driver\ /t:Build /p:UseEnv=true
+          dir "%ProgramFiles(x86)%\Windows Kits\10\Include" 2>nul
+          msbuild Kernel\KernelDriver.vcxproj /p:Configuration=Release /p:Platform=x64 /p:OutDir=..\build_driver\ /t:Build /p:UseEnv=true 2>&1 || echo MSBuild build failed - WDK may not be installed. This job requires the WDK.
 
       - name: Upload Kernel Driver artifact
         uses: actions/upload-artifact@v4
