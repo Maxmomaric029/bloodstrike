@@ -34,6 +34,7 @@ HWND                    g_Hwnd      = nullptr;
 bool                    g_Initialized = false;
 
 static WNDPROC g_OldWndProc = nullptr;
+static void**  g_SwapChainVTable = nullptr;  // saved from CreateDummyDevice
 
 // ============================================================
 // Safe RTV management
@@ -240,6 +241,7 @@ bool CreateDummyDevice() {
         return false;
     }
 
+    g_SwapChainVTable = vtable;  // save vtable pointer (in DLL .rdata, persists after Release)
     oPresent       = (PresentFn)vtable[8];
     oResizeBuffers = (ResizeBuffersFn)vtable[13];
 
@@ -265,139 +267,36 @@ bool CreateDummyDevice() {
 
 // ============================================================
 // Install vtable hooks
+// COM vtables are shared across all instances of the same class,
+// so the vtable we found from the dummy device IS the same one
+// the game's swap chain uses. Just modify it in place.
 // ============================================================
 bool InstallHooks() {
-    if (!oPresent || !oResizeBuffers) {
-        printf("[DLL] Cannot install hooks: original functions not set\n");
+    if (!g_SwapChainVTable || !oPresent || !oResizeBuffers) {
+        printf("[DLL] Cannot install hooks: vtable or originals not set\n");
         return false;
     }
 
-    // We need the vtable pointer from the game's swap chain.
-    // Since all D3D11 swap chains share the same vtable (COM),
-    // we can use the one we found from the dummy device.
-    // However, we saved oPresent/oResizeBuffers as direct pointers,
-    // so we need to find the vtable from the actual game swap chain.
-
-    // Find the game's window and its DX11 swap chain
-    DWORD pid = GetCurrentProcessId();
-    HWND gameHwnd = nullptr;
-    EnumWindows([](HWND h, LPARAM lp) -> BOOL {
-        DWORD wpid;
-        GetWindowThreadProcessId(h, &wpid);
-        if (wpid == (DWORD)lp && IsWindowVisible(h)) {
-            gameHwnd = h;
-            return FALSE;
-        }
-        return TRUE;
-    }, (LPARAM)pid);
-
-    if (!gameHwnd) {
-        printf("[DLL] ERROR: Cannot find game window for hook install\n");
-        return false;
-    }
-
-    // Get the game's swap chain from its D3D device
-    // We can find it by enumerating DXGI outputs
-    IDXGIFactory* factory = nullptr;
-    HRESULT hr = CreateDXGIFactory(__uuidof(IDXGIFactory), (void**)&factory);
-    if (FAILED(hr) || !factory) {
-        printf("[DLL] CreateDXGIFactory failed: 0x%08X\n", hr);
-        return false;
-    }
-
-    // Enumerate adapters to find the swap chain
-    IDXGIAdapter* adapter = nullptr;
-    bool found = false;
-    for (UINT i = 0; factory->EnumAdapters(i, &adapter) != DXGI_ERROR_NOT_FOUND; i++) {
-        IDXGIOutput* output = nullptr;
-        for (UINT j = 0; adapter->EnumOutputs(j, &output) != DXGI_ERROR_NOT_FOUND; j++) {
-            IDXGIOutput1* output1 = nullptr;
-            if (SUCCEEDED(output->QueryInterface(__uuidof(IDXGIOutput1), (void**)&output1))) {
-                // Found a DXGI output — this doesn't directly give us the swap chain
-                output1->Release();
-            }
-            output->Release();
-        }
-        adapter->Release();
-    }
-
-    // Actually, the simplest approach: since all COM vtables are shared,
-    // the vtable we found from the dummy device IS the same vtable
-    // the game uses. Just modify it in place.
-    // We already have oPresent and oResizeBuffers saved.
-
-    // Re-read the vtable pointer (it's in DLL memory, still valid)
-    // We'll modify it via VirtualProtect
-
-    // Find any existing D3D11 swap chain to get the vtable
-    // Use the approach: create a temp device, get vtable, modify it
-    // The vtable is the same for all D3D11 swap chains in this process
-
-    // Get the vtable from the game's swap chain by creating a minimal device
-    void** gameVTable = nullptr;
-
-    // Create a minimal device to get the vtable
-    {
-        IDXGISwapChain* tmpSC = nullptr;
-        ID3D11Device* tmpDev = nullptr;
-        ID3D11DeviceContext* tmpCtx = nullptr;
-
-        HWND tmpWnd = CreateWindowA("DX11Dummy", "", WS_OVERLAPPEDWINDOW,
-                                    0, 0, 2, 2, nullptr, nullptr,
-                                    GetModuleHandleA(NULL), nullptr);
-
-        DXGI_SWAP_CHAIN_DESC tsd{};
-        tsd.BufferCount = 1;
-        tsd.BufferDesc.Width = 2;
-        tsd.BufferDesc.Height = 2;
-        tsd.BufferDesc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-        tsd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-        tsd.OutputWindow = tmpWnd;
-        tsd.SampleDesc.Count = 1;
-        tsd.Windowed = TRUE;
-        tsd.SwapEffect = DXGI_SWAP_EFFECT_DISCARD;
-
-        hr = D3D11CreateDeviceAndSwapChain(
-            nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, 0, nullptr, 0,
-            D3D11_SDK_VERSION, &tsd, &tmpSC, &tmpDev, nullptr, &tmpCtx);
-
-        if (SUCCEEDED(hr) && tmpSC) {
-            gameVTable = *(void***)tmpSC;
-            tmpSC->Release();
-            if (tmpDev) tmpDev->Release();
-            if (tmpCtx) tmpCtx->Release();
-        }
-        if (tmpWnd) DestroyWindow(tmpWnd);
-    }
-
-    if (!gameVTable) {
-        printf("[DLL] ERROR: Could not get game vtable\n");
-        return false;
-    }
-
-    printf("[DLL] Game VTable=%p  Present=%p  ResizeBuffers=%p\n",
-           gameVTable, gameVTable[8], gameVTable[13]);
-
-    // Install hooks via VirtualProtect
+    printf("[DLL] Installing vtable hooks on %p...\n", g_SwapChainVTable);
     DWORD oldProt;
 
     // Hook Present (index 8)
-    if (!VirtualProtect(&gameVTable[8], sizeof(void*), PAGE_READWRITE, &oldProt)) {
+    if (!VirtualProtect(&g_SwapChainVTable[8], sizeof(void*), PAGE_READWRITE, &oldProt)) {
         printf("[DLL] VirtualProtect failed for Present: %lu\n", GetLastError());
         return false;
     }
-    gameVTable[8] = (void*)HookedPresent;
-    VirtualProtect(&gameVTable[8], sizeof(void*), oldProt, &oldProt);
-    printf("[DLL] Present hooked -> %p\n", HookedPresent);
+    g_SwapChainVTable[8] = (void*)HookedPresent;
+    VirtualProtect(&g_SwapChainVTable[8], sizeof(void*), oldProt, &oldProt);
+    printf("[DLL] Present hooked: %p -> %p\n", oPresent, HookedPresent);
 
     // Hook ResizeBuffers (index 13)
-    if (!VirtualProtect(&gameVTable[13], sizeof(void*), PAGE_READWRITE, &oldProt)) {
+    if (!VirtualProtect(&g_SwapChainVTable[13], sizeof(void*), PAGE_READWRITE, &oldProt)) {
         printf("[DLL] VirtualProtect failed for ResizeBuffers: %lu\n", GetLastError());
         return false;
     }
-    gameVTable[13] = (void*)HookedResizeBuffers;
-    VirtualProtect(&gameVTable[13], sizeof(void*), oldProt, &oldProt);
-    printf("[DLL] ResizeBuffers hooked -> %p\n", HookedResizeBuffers);
+    g_SwapChainVTable[13] = (void*)HookedResizeBuffers;
+    VirtualProtect(&g_SwapChainVTable[13], sizeof(void*), oldProt, &oldProt);
+    printf("[DLL] ResizeBuffers hooked: %p -> %p\n", oResizeBuffers, HookedResizeBuffers);
 
     printf("[DLL] VTable hooks installed successfully!\n");
     return true;
