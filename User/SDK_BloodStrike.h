@@ -127,10 +127,17 @@ namespace bloodstrike
     // Base address of Game.exe module (reference; must be adjusted at runtime)
     constexpr uint64_t GameBaseRef = 0x7FF6F9A20000ULL;
 
-    // ---------- Renderer ----------
+    // ---------- Renderer / Global static pointers ----------
     namespace renderer
     {
         constexpr uint64_t hwnd = 0x6DE9430;    // GameBase + hwnd => window handle
+
+        // *** UNVERIFIED — NOT from the dumper. Must be found with a memory scanner. ***
+        // These are global pointers stored in the renderer's static data.
+        // Scan GameBase's data segment for pointer-sized values that resolve to
+        // valid actor / camera objects to find the correct offsets.
+        constexpr uint64_t localActor = 0;       // GameBase + localActor => local actor instance (NEEDS SCANNING)
+        constexpr uint64_t camera     = 0;       // GameBase + camera     => camera object              (NEEDS SCANNING)
     }
 
     // ---------- Function addresses (relative to GameBase) ----------
@@ -169,12 +176,17 @@ namespace bloodstrike
     {
         // --- VERIFIED (from BloodStrike Offset Finder v2.0) ---
         constexpr uint64_t ClientEngine_to_IGameplay              = 0x58;
-        constexpr uint64_t ClientPlayer_to_localActor             = 0x288;
-        constexpr uint64_t ClientPlayer_to_camera                 = 0x238;
         constexpr uint64_t actorInstance_to_actorProps            = 0x278;
         constexpr uint64_t IEntity_to_entityMask                  = 0x2E0;
         constexpr uint64_t IEntity_to_IArea                       = 0x88;
         constexpr uint64_t pose_to_BipedPose                      = 0x90;
+
+        // --- REMOVED: ClientPlayer offsets (no verified path to reach ClientPlayer) ---
+        // The dumper verified these offsets WITHIN a ClientPlayer object, but the
+        // chain IGameplay → ClientPlayer was fabricated by a previous AI. Until a
+        // verified path to ClientPlayer is found, these offsets are unusable:
+        // constexpr uint64_t ClientPlayer_to_localActor = 0x288;
+        // constexpr uint64_t ClientPlayer_to_camera     = 0x238;
 
         // --- UNVERIFIED — confirm each in-game with a memory scanner ---
         constexpr uint64_t Actor_to_componentsArray               = 0x98;   // TArray<Component*>.data pointer
@@ -184,11 +196,6 @@ namespace bloodstrike
         constexpr uint64_t ICamera_to_viewMatrix                  = 0x30;   // 4x4 view-projection matrix inside ICamera
         constexpr uint64_t actorProps_to_pose                     = 0x50;   // Pose pointer inside ActorProperties
         constexpr int      SKELETON_COMP_FALLBACK_INDEX           = 2;      // Fallback if vtable scanning fails
-
-        // *** UNVERIFIED — KNOWN BAD: produces garbage like 0x7fc000007fc00000 ***
-        // This offset is NOT from the dumper. Use a memory scanner to find the
-        // correct ClientPlayer pointer inside the IGameplay object.
-        constexpr uint64_t IGameplay_to_localPlayer               = 0x10;   // ClientPlayer pointer inside IGameplay
     }
 
     // ---------- Entity / Actor constants ----------
