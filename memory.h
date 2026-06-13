@@ -24,6 +24,13 @@ inline uintptr_t ReadPtr(uintptr_t address) {
 }
 
 // Read raw bytes
+// Get cached module base address
+inline uintptr_t GetBase() {
+    static uintptr_t base = (uintptr_t)GetModuleHandleA(NULL);
+    return base;
+}
+
+// Read raw bytes
 inline bool ReadRaw(uintptr_t address, void* buffer, size_t size) {
     if (!address || !buffer || size == 0) return false;
     __try {

@@ -12,17 +12,9 @@
 #include "offsets.h"
 #include "memory.h"
 #include "math.h"
-#include "hooks.h"
+#include "menu.h"
 
 #include "imgui.h"
-
-// ============================================================
-// Module base (cached)
-// ============================================================
-static uintptr_t GetBase() {
-    static uintptr_t base = (uintptr_t)GetModuleHandleA(NULL);
-    return base;
-}
 
 // ============================================================
 // Bone chain resolution
@@ -194,13 +186,12 @@ void RenderESP() {
     do {
         if (!current || iterations++ > MAX_ITERATIONS) break;
 
-        uintptr_t actor = ReadPtr(current + off::EntityNode_to_actor);
-        if (actor && actor != localActor) {
+        uintptr_t actor = ReadPtr(current + off::EntityNode_to_actor);        if (actor && actor != localActor) {
             EntityInfo info{};
             if (ReadEntity(actor, info) && info.alive) {
                 Vector2 headScreen;
                 if (!WorldToScreen(viewMatrix, info.headPos, headScreen, sw, sh))
-                    goto next;
+                    continue;
 
                 Vector2 footScreen;
                 WorldToScreen(viewMatrix, info.footPos, footScreen, sw, sh);
@@ -217,41 +208,41 @@ void RenderESP() {
                 else
                     color = IM_COL32(255, 150, 50, 255);
 
-                // Corner box
-                {
+                if (ShowBoxes()) {
                     Vector2 tl(headScreen.x - boxW/2, headScreen.y);
                     Vector2 br(headScreen.x + boxW/2, footScreen.y);
                     DrawCornerBox(dl, tl, br, color);
 
-                    // Health bar
-                    float hp = (float)info.health / 100.0f;
-                    if (hp < 0.0f) hp = 0.0f;
-                    if (hp > 1.0f) hp = 1.0f;
-                    float barH = boxH * hp;
-                    ImU32 hpColor = hp > 0.6f ? IM_COL32(50,255,50,255)
-                                   : hp > 0.3f ? IM_COL32(255,255,50,255)
-                                   : IM_COL32(255,50,50,255);
-                    dl->AddRectFilled(
-                        {tl.x - 5.0f, tl.y},
-                        {tl.x - 1.0f, tl.y + boxH},
-                        IM_COL32(30, 30, 30, 200));
-                    dl->AddRectFilled(
-                        {tl.x - 5.0f, tl.y + boxH - barH},
-                        {tl.x - 1.0f, tl.y + boxH},
-                        hpColor);
+                    if (ShowHealth()) {
+                        float hp = (float)info.health / 100.0f;
+                        if (hp < 0.0f) hp = 0.0f;
+                        if (hp > 1.0f) hp = 1.0f;
+                        float barH = boxH * hp;
+                        ImU32 hpColor = hp > 0.6f ? IM_COL32(50,255,50,255)
+                                       : hp > 0.3f ? IM_COL32(255,255,50,255)
+                                       : IM_COL32(255,50,50,255);
+                        dl->AddRectFilled(
+                            {tl.x - 5.0f, tl.y},
+                            {tl.x - 1.0f, tl.y + boxH},
+                            IM_COL32(30, 30, 30, 200));
+                        dl->AddRectFilled(
+                            {tl.x - 5.0f, tl.y + boxH - barH},
+                            {tl.x - 1.0f, tl.y + boxH},
+                            hpColor);
+                    }
                 }
 
-                // Skeleton
-                DrawSkeleton(dl, info, viewMatrix, sw, sh, IM_COL32(200, 200, 50, 255));
+                if (ShowSkeleton())
+                    DrawSkeleton(dl, info, viewMatrix, sw, sh, IM_COL32(200, 200, 50, 255));
 
-                // Distance
-                char buf[32];
-                snprintf(buf, sizeof(buf), "%.0fm", dist);
-                dl->AddText({headScreen.x - 10.0f, headScreen.y - 18.0f},
-                            IM_COL32(255, 255, 255, 255), buf);
+                if (ShowDistance()) {
+                    char buf[32];
+                    snprintf(buf, sizeof(buf), "%.0fm", dist);
+                    dl->AddText({headScreen.x - 10.0f, headScreen.y - 18.0f},
+                                IM_COL32(255, 255, 255, 255), buf);
+                }
             }
         }
-    next:
         current = ReadPtr(current + off::EntityNode_to_next);
     } while (current != head);
 }

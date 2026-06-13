@@ -40,10 +40,6 @@ static WNDPROC g_OldWndProc = nullptr;
 // ============================================================
 // Helpers
 // ============================================================
-static uintptr_t GetBase() {
-    static uintptr_t base = (uintptr_t)GetModuleHandleA(NULL);
-    return base;
-}
 
 static void CreateRTV() {
     if (!g_SwapChain || !g_Device) return;
