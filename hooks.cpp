@@ -162,6 +162,17 @@ HRESULT __stdcall HookedResizeBuffers(IDXGISwapChain* pSwapChain, UINT b, UINT w
 }
 
 // ============================================================
+// WndProc hook — forwards input to ImGui, handles Insert toggle
+// ============================================================
+static LRESULT __stdcall HookWndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
+    if (IsMenuOpen() && ImGui_ImplWin32_WndProcHandler(h, m, w, l))
+        return 1;
+    if (m == WM_KEYDOWN && w == VK_INSERT)
+        ToggleMenu();
+    return CallWindowProcW(g_OldWndProc, h, m, w, l);
+}
+
+// ============================================================
 // Present Hook
 // ============================================================
 HRESULT __stdcall HookedPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT Flags) {
@@ -193,14 +204,7 @@ HRESULT __stdcall HookedPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, U
         ImGui_ImplDX11_Init(g_Device, g_Context);
 
         // Hook WndProc for input
-        g_OldWndProc = (WNDPROC)SetWindowLongPtrW(g_Hwnd, GWLP_WNDPROC,
-            (LONG_PTR)[](HWND h, UINT m, WPARAM w, LPARAM l) -> LRESULT {
-                if (IsMenuOpen() && ImGui_ImplWin32_WndProcHandler(h, m, w, l))
-                    return 1;
-                if (m == WM_KEYDOWN && w == VK_INSERT)
-                    ToggleMenu();
-                return CallWindowProcW(g_OldWndProc, h, m, w, l);
-            });
+        g_OldWndProc = (WNDPROC)SetWindowLongPtrW(g_Hwnd, GWLP_WNDPROC, (LONG_PTR)HookWndProc);
 
         g_Initialized = true;
     }
