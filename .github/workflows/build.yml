@@ -19,8 +19,10 @@ jobs:
 
   # ==========================================================================
   # Job 1 — Kernel Driver (BS_KernelDriver.sys)
-  # Installs the WDK via the official Microsoft winget DSC config,
-  # then builds the driver using MSBuild + KernelDriver.vcxproj.
+  #
+  # Minimal approach: the runner already has VS Enterprise.
+  # We only install the Windows WDK (~1-2 GB) via winget.
+  # No need for the full VS+WDK bundle (20+ GB).
   # ==========================================================================
   build-driver:
     name: Build Kernel Driver (.sys)
@@ -31,23 +33,12 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install WDK via official Microsoft winget config
+      - name: Install WDK (minimal — only ~1-2 GB)
         shell: powershell
         run: |
-          Write-Host "Installing WDK + VS Enterprise workload via Microsoft DSC config..."
-          Write-Host "This may take 10-20 minutes on the first run."
-
-          # Use the official Microsoft WDK DSC config for Visual Studio Enterprise
-          # (windows-2022 runner has VS Enterprise pre-installed)
-          $configUrl = "https://raw.githubusercontent.com/microsoft/Windows-driver-samples/main/_wdk_utils/winget/configs/wdk-vsenterprise.dsc.yaml"
-          $configPath = "$env:TEMP\wdk-install.dsc.yaml"
-
-          Write-Host "Downloading config from: $configUrl"
-          Invoke-WebRequest -Uri $configUrl -OutFile $configPath
-
-          Write-Host "Running winget configure..."
-          winget configure -f $configPath --accept-source-agreements --accept-package-agreements 2>&1
-
+          Write-Host "Installing Windows WDK (standalone package)..."
+          Write-Host "The runner already has VS Enterprise, so we only need the WDK."
+          winget install Microsoft.WindowsWDK --accept-source-agreements --accept-package-agreements 2>&1
           Write-Host "WDK installation complete."
 
       - name: Verify WDK installation
@@ -56,8 +47,7 @@ jobs:
           echo Checking for kernel-mode headers...
           dir /s /b "%ProgramFiles(x86)%\Windows Kits\10\Include\10.0.*\km\ntddk.h" 2>nul
           if errorlevel 1 (
-              echo WARNING: ntddk.h not found after WDK install.
-              echo The driver build may fail.
+              echo WARNING: ntddk.h not found.
           ) else (
               echo WDK headers found!
           )
