@@ -37,9 +37,10 @@ target_link_libraries(BloodStrikeESP PRIVATE
     dwrite
 )
 
-# Set subsystem to Windows to avoid console window (optional: use CONSOLE for debugging)
+# Use CONSOLE subsystem so the entry point is main(), not WinMain()
+# A console window will appear — useful for debugging and log output.
 set_target_properties(BloodStrikeESP PROPERTIES
-    WIN32_EXECUTABLE TRUE
+    WIN32_EXECUTABLE FALSE
     OUTPUT_NAME "BloodStrikeESP"
 )
 

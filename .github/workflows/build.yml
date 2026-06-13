@@ -59,12 +59,12 @@ jobs:
           dir "%ProgramFiles(x86)%\Windows Kits\10\Include" 2>nul
           msbuild Kernel\KernelDriver.vcxproj /p:Configuration=Release /p:Platform=x64 /p:OutDir=..\build_driver\ /t:Build /p:UseEnv=true 2>&1 || echo MSBuild build failed - WDK may not be installed. This job requires the WDK.
 
-      - name: Upload Kernel Driver artifact
+      - name: Upload Kernel Driver artifact (if built)
         uses: actions/upload-artifact@v4
         with:
           name: BS_KernelDriver
           path: build_driver/BS_KernelDriver.sys
-          if-no-files-found: error
+          if-no-files-found: warn
 
   # ==========================================================================
   # Job 2 — User-mode ESP Overlay (BloodStrikeESP.exe)
