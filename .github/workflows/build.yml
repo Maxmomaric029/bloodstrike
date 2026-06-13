@@ -1,110 +1,37 @@
-# ============================================================================
-# BloodStrike ESP — CI Build
-#
-# Two jobs in one workflow:
-#   1. Kernel Driver (.sys) — WDK installed via winget, built with MSBuild
-#   2. User-mode Overlay (.exe) — CMake + MSVC
-# ============================================================================
-
-name: Build BloodStrike ESP
+name: Build DLL
 
 on:
   push:
-    branches: [ "main", "master" ]
+    branches: [master]
   pull_request:
-    branches: [ "main", "master" ]
-  workflow_dispatch:
+    branches: [master]
 
 jobs:
-
-  # ==========================================================================
-  # Job 1 — Kernel Driver (BS_KernelDriver.sys)
-  #
-  # Minimal approach: the runner already has VS Enterprise.
-  # We only install the Windows WDK (~1-2 GB) via winget.
-  # No need for the full VS+WDK bundle (20+ GB).
-  # ==========================================================================
-  build-driver:
-    name: Build Kernel Driver (.sys)
-    runs-on: windows-2022
-    continue-on-error: true
+  build:
+    runs-on: windows-latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install WDK (minimal — only ~1-2 GB)
-        shell: powershell
-        run: |
-          Write-Host "Installing Windows WDK (standalone package)..."
-          Write-Host "The runner already has VS Enterprise, so we only need the WDK."
-          winget install Microsoft.WindowsWDK --accept-source-agreements --accept-package-agreements 2>&1
-          Write-Host "WDK installation complete."
+      - name: Download ImGui
+        run: git clone --depth 1 https://github.com/ocornut/imgui.git
 
-      - name: Verify WDK installation
-        shell: cmd
+      - name: Build DLL
         run: |
-          echo Checking for kernel-mode headers...
-          dir /s /b "%ProgramFiles(x86)%\Windows Kits\10\Include\10.0.*\km\ntddk.h" 2>nul
-          if errorlevel 1 (
-              echo WARNING: ntddk.h not found.
-          ) else (
-              echo WDK headers found!
-          )
+          cl /LD dllmain.cpp hooks.cpp esp.cpp menu.cpp ^
+            imgui\imgui.cpp ^
+            imgui\imgui_draw.cpp ^
+            imgui\imgui_widgets.cpp ^
+            imgui\imgui_tables.cpp ^
+            imgui\backends\imgui_impl_dx11.cpp ^
+            imgui\backends\imgui_impl_win32.cpp ^
+            /Fe:BloodStrike.dll ^
+            /EHsc /O2 /I imgui ^
+            d3d11.lib dxgi.lib user32.lib
 
-      - name: Build kernel driver with MSBuild
-        shell: cmd
-        run: |
-          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
-          msbuild Kernel\KernelDriver.vcxproj /p:Configuration=Release /p:Platform=x64 /p:OutDir=..\build_driver\ /t:Build
-          if errorlevel 1 (
-              echo Driver build failed.
-              exit /b 0
-          )
-          echo === Driver built successfully! ===
-          dir build_driver\BS_KernelDriver.sys
-
-      - name: Upload Kernel Driver artifact
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: BS_KernelDriver
-          path: build_driver/BS_KernelDriver.sys
-          if-no-files-found: warn
-
-  # ==========================================================================
-  # Job 2 — User-mode ESP Overlay (BloodStrikeESP.exe)
-  # ==========================================================================
-  build-exe:
-    name: Build User ESP (.exe)
-    runs-on: windows-2022
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup CMake
-        uses: lukka/get-cmake@latest
-
-      - name: Setup Visual Studio dev environment
-        uses: microsoft/setup-msbuild@v2
-        with:
-          vs-version: '17.0'
-
-      - name: Configure CMake (x64 Release)
-        shell: cmd
-        run: |
-          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
-          cmake -B build_exe -A x64 .
-
-      - name: Build EXE
-        shell: cmd
-        run: |
-          call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
-          cmake --build build_exe --config Release
-
-      - name: Upload ESP Overlay artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: BloodStrikeESP
-          path: build_exe/Release/BloodStrikeESP.exe
-          if-no-files-found: error
+          name: BloodStrike-DLL
+          path: BloodStrike.dll

@@ -1,46 +1,12 @@
-# Build outputs
-build/
-x64/
-Release/
-Debug/
-*.exe
-*.sys
+build_driver/
+*.obj
+*.lib
+*.exp
 *.pdb
 *.ilk
-*.obj
-*.exp
-*.lib
+*.exe
 *.dll
-*.log
-*.user
-*.suo
-*.sdf
-*.opensdf
-*.vcxproj.filters
-*.VC.db
-
-# Visual Studio
-.vs/
-*.sln
-build_exe/*.vcxproj
-build_driver/*.vcxproj
-*.vcxproj.user
-
-# Except our manually crafted kernel driver project
-!Kernel/KernelDriver.vcxproj
-
-# CMake
-CMakeCache.txt
-CMakeFiles/
-cmake_install.cmake
-Makefile
-
-# IDE
-.idea/
-.vscode/
-*.swp
-*.swo
-
-# Windows
-Thumbs.db
-Desktop.ini
+*.cer
+nul
+winget
+imgui/
