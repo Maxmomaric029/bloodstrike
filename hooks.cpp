@@ -151,11 +151,13 @@ HRESULT __stdcall HookedPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, U
             ImGui_ImplWin32_NewFrame();
             ImGui::NewFrame();
 
-            // Poll Insert key (works even if WndProc hook failed)
-            static bool s_InsertWasDown = false;
-            bool insertDown = (GetAsyncKeyState(VK_INSERT) & 0x8000) != 0;
-            if (insertDown && !s_InsertWasDown) ToggleMenu();
-            s_InsertWasDown = insertDown;
+            // Poll Insert key only if WndProc hook failed
+            if (!g_OldWndProc) {
+                static bool s_InsertWasDown = false;
+                bool insertDown = (GetAsyncKeyState(VK_INSERT) & 0x8000) != 0;
+                if (insertDown && !s_InsertWasDown) ToggleMenu();
+                s_InsertWasDown = insertDown;
+            }
 
             // Render ESP
             if (IsESPEnabled())

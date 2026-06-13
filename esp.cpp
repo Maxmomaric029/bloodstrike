@@ -208,21 +208,7 @@ void RenderESP() {
         local.health = SafeRead<int>(localActor + off::Actor_to_health);
         local.team = SafeRead<int>(localActor + off::Actor_to_team);
         memset(local.bones, 0, sizeof(local.bones));
-        uintptr_t boneBase = 0;
-        uintptr_t p1 = ReadPtr(localActor + off::BoneStep1);
-        if (p1) {
-            uintptr_t p2 = ReadPtr(p1 + off::BoneStep2);
-            if (p2) {
-                uintptr_t p3 = ReadPtr(p2 + off::BoneStep3);
-                if (p3) {
-                    uintptr_t p4 = ReadPtr(p3 + off::BoneStep4);
-                    if (p4) {
-                        uintptr_t p5 = ReadPtr(p4 + off::BoneStep5);
-                        if (p5) boneBase = p5 + off::BoneData;
-                    }
-                }
-            }
-        }
+        uintptr_t boneBase = ResolveBoneChain(localActor);
         if (boneBase) {
             local.bones[6] = ReadBone(boneBase, 6);
             local.footPos = ReadBone(boneBase, 24);
