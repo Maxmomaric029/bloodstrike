@@ -251,7 +251,9 @@ void RenderESP() {
                     Vector2 br(headScreen.x + boxW/2, footScreen.y);
                     DrawCornerBox(dl, tl, br, color);
                     if (ShowHealth()) {
-                        float hp = std::clamp((float)info.health / 100.0f, 0.0f, 1.0f);
+                        float hp = (float)info.health / 100.0f;
+                        if (hp < 0.0f) hp = 0.0f;
+                        if (hp > 1.0f) hp = 1.0f;
                         float barH = boxH * hp;
                         ImU32 hpColor = hp > 0.6f ? IM_COL32(50,255,50,255)
                                        : hp > 0.3f ? IM_COL32(255,255,50,255)
