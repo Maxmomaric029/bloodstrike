@@ -139,7 +139,7 @@ HRESULT __stdcall HookedResizeBuffers(IDXGISwapChain* pSwapChain, UINT b, UINT w
 // ============================================================
 // Create dummy device + find vtable
 // ============================================================
-static bool CreateDummyDevice() {
+bool CreateDummyDevice() {
     HINSTANCE hInst = GetModuleHandleA(NULL);
     WNDCLASSEXA wc = { sizeof(wc), CS_CLASSDC, DefWindowProcA, 0, 0,
                        hInst, nullptr, nullptr, nullptr, nullptr,
