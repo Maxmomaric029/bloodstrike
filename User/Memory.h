@@ -9,11 +9,31 @@
 
 // ---------------------------------------------------------------------------
 // NT API types — defined manually to guarantee compilation across all
-// Windows SDK versions (winternl.h varies widely between SDK versions).
+// Windows SDK versions (<winternl.h> availability varies).
 // ---------------------------------------------------------------------------
+
+// NTSTATUS — returned by NT kernel functions
+#ifndef NTSTATUS
+typedef LONG NTSTATUS;
+#endif
 
 #ifndef NT_SUCCESS
 #define NT_SUCCESS(Status) (((NTSTATUS)(Status)) >= 0)
+#endif
+
+// NTAPI calling convention for NT system calls
+#ifndef NTAPI
+#define NTAPI __stdcall
+#endif
+
+// UNICODE_STRING / PUNICODE_STRING — used by NT API structures
+#ifndef _UNICODE_STRING_DEFINED
+typedef struct _UNICODE_STRING {
+    USHORT Length;
+    USHORT MaximumLength;
+    PWSTR  Buffer;
+} UNICODE_STRING, *PUNICODE_STRING;
+#define _UNICODE_STRING_DEFINED
 #endif
 
 // CLIENT_ID — process/thread identifier
