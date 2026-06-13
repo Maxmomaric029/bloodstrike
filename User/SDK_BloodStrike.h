@@ -183,8 +183,12 @@ namespace bloodstrike
         constexpr uint64_t Actor_to_team                          = 0x2E8;  // int32 team (right after health)
         constexpr uint64_t ICamera_to_viewMatrix                  = 0x30;   // 4x4 view-projection matrix inside ICamera
         constexpr uint64_t actorProps_to_pose                     = 0x50;   // Pose pointer inside ActorProperties
-        constexpr uint64_t IGameplay_to_localPlayer               = 0x10;   // ClientPlayer pointer inside IGameplay
         constexpr int      SKELETON_COMP_FALLBACK_INDEX           = 2;      // Fallback if vtable scanning fails
+
+        // *** UNVERIFIED — KNOWN BAD: produces garbage like 0x7fc000007fc00000 ***
+        // This offset is NOT from the dumper. Use a memory scanner to find the
+        // correct ClientPlayer pointer inside the IGameplay object.
+        constexpr uint64_t IGameplay_to_localPlayer               = 0x10;   // ClientPlayer pointer inside IGameplay
     }
 
     // ---------- Entity / Actor constants ----------

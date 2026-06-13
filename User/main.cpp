@@ -341,38 +341,100 @@ bool GetCameraMatrix(MemoryReader& reader, uint64_t gameBase,
 // ---------------------------------------------------------------------------
 bool GetLocalPlayer(MemoryReader& reader, uint64_t gameBase,
                     uint64_t& outClientEngine, uint64_t& outLocalPlayer,
-                    uint64_t& outEntityList)
+                    uint64_t& outLocalActor, uint64_t& outEntityList)
 {
-    // Read ClientEngine pointer
+    // --- Step 1: ClientEngine ---
     uint64_t clientEnginePtr = 0;
     if (!reader.ReadMemory<uint64_t>(
             gameBase + bloodstrike::offsets::Messiah__ClientEngine,
             clientEnginePtr))
+    {
+        std::cerr << "[Chain] FAILED to read ClientEngine at GameBase+"
+                  << std::hex << bloodstrike::offsets::Messiah__ClientEngine << std::dec << "\n";
         return false;
+    }
 
     if (clientEnginePtr == 0)
+    {
+        std::cerr << "[Chain] ClientEngine pointer is NULL (GameBase+"
+                  << std::hex << bloodstrike::offsets::Messiah__ClientEngine
+                  << " == 0)" << std::dec << "\n";
         return false;
+    }
 
     outClientEngine = clientEnginePtr;
+    std::cout << "[Chain] GameBase          = 0x" << std::hex << gameBase << std::dec << "\n";
+    std::cout << "[Chain] ClientEngine      = 0x" << std::hex << clientEnginePtr << std::dec
+              << "  (GameBase + 0x" << std::hex << bloodstrike::offsets::Messiah__ClientEngine
+              << ")" << std::dec << "\n";
 
-    // Read IGameplay from ClientEngine:
+    // --- Step 2: IGameplay (verified offset) ---
     uint64_t gameplayPtr = 0;
     if (!reader.ReadMemory<uint64_t>(
             clientEnginePtr + bloodstrike::field::ClientEngine_to_IGameplay,
             gameplayPtr))
+    {
+        std::cerr << "[Chain] FAILED to read IGameplay at ClientEngine+"
+                  << std::hex << bloodstrike::field::ClientEngine_to_IGameplay << std::dec << "\n";
         return false;
+    }
 
     if (gameplayPtr == 0)
+    {
+        std::cerr << "[Chain] IGameplay pointer is NULL (ClientEngine+"
+                  << std::hex << bloodstrike::field::ClientEngine_to_IGameplay
+                  << " == 0)" << std::dec << "\n";
         return false;
+    }
 
-    // --- UNVERIFIED: IGameplay_to_localPlayer ---
+    std::cout << "[Chain] IGameplay         = 0x" << std::hex << gameplayPtr << std::dec
+              << "  (ClientEngine + 0x" << std::hex << bloodstrike::field::ClientEngine_to_IGameplay
+              << ")" << std::dec << "\n";
+
+    // --- Step 3: LocalPlayer via IGameplay (*** UNVERIFIED OFFSET — likely wrong ***) ---
     uint64_t localPlayerPtr = 0;
     if (!reader.ReadMemory<uint64_t>(gameplayPtr + bloodstrike::field::IGameplay_to_localPlayer, localPlayerPtr))
+    {
+        std::cerr << "[Chain] FAILED to read LocalPlayer at IGameplay+"
+                  << std::hex << bloodstrike::field::IGameplay_to_localPlayer
+                  << " (UNVERIFIED)" << std::dec << "\n";
         return false;
+    }
 
     outLocalPlayer = localPlayerPtr;
+    std::cout << "[Chain] LocalPlayer       = 0x" << std::hex << localPlayerPtr << std::dec
+              << "  (IGameplay + 0x" << std::hex << bloodstrike::field::IGameplay_to_localPlayer
+              << " [*** UNVERIFIED ***])" << std::dec << "\n";
 
-    // Read entity list base
+    // --- Step 4: LocalActor (verified offset) ---
+    uint64_t localActorPtr = 0;
+    if (!reader.ReadMemory<uint64_t>(
+            localPlayerPtr + bloodstrike::field::ClientPlayer_to_localActor,
+            localActorPtr))
+    {
+        std::cerr << "[Chain] FAILED to read LocalActor at LocalPlayer+"
+                  << std::hex << bloodstrike::field::ClientPlayer_to_localActor << std::dec << "\n";
+        return false;
+    }
+
+    outLocalActor = localActorPtr;
+    std::cout << "[Chain] LocalActor        = 0x" << std::hex << localActorPtr << std::dec
+              << "  (LocalPlayer + 0x" << std::hex << bloodstrike::field::ClientPlayer_to_localActor
+              << ")" << std::dec << "\n";
+
+    // Warn if LocalPlayer looks like garbage (high bits set in lower 32-bit half)
+    if (localPlayerPtr != 0 && ((localPlayerPtr >> 32) != 0) && ((localPlayerPtr & 0xFFFFFFFF) >> 28) != 0)
+    {
+        std::cerr << "[Chain] WARNING: LocalPlayer 0x" << std::hex << localPlayerPtr
+                  << " looks like garbage! The IGameplay_to_localPlayer offset (0x"
+                  << std::hex << bloodstrike::field::IGameplay_to_localPlayer
+                  << ") is almost certainly wrong.\n"
+                  << "         Use a memory scanner on the IGameplay object (0x"
+                  << std::hex << gameplayPtr << ") to find the real ClientPlayer pointer."
+                  << std::dec << "\n";
+    }
+
+    // --- Step 5: Entity list ---
     uint64_t entityListBase = 0;
     if (!reader.ReadMemory<uint64_t>(
             gameBase + bloodstrike::offsets::Messiah__EntityList,
@@ -380,6 +442,9 @@ bool GetLocalPlayer(MemoryReader& reader, uint64_t gameBase,
         return false;
 
     outEntityList = entityListBase;
+    std::cout << "[Chain] EntityList        = 0x" << std::hex << entityListBase << std::dec << "\n";
+    std::cout << "[Chain] --- End of pointer chain ---\n";
+
     return true;
 }
 
@@ -391,28 +456,18 @@ void ESPLoop(MemoryReader& reader, uint64_t gameBase,
 {
     uint64_t clientEngine  = 0;
     uint64_t localPlayer   = 0;
+    uint64_t localActor    = 0;
     uint64_t entityListPtr = 0;
 
-    if (!GetLocalPlayer(reader, gameBase, clientEngine, localPlayer, entityListPtr))
+    if (!GetLocalPlayer(reader, gameBase, clientEngine, localPlayer, localActor, entityListPtr))
     {
         std::cerr << "[ESP] Failed to get local player / engine pointers.\n";
         return;
     }
 
     std::wcout << L"[ESP] Local player at: 0x" << std::hex << localPlayer << std::dec << L"\n";
-    std::wcout << L"[ESP] Entity list at: 0x" << std::hex << entityListPtr << std::dec << L"\n";
-
-    // Local player -> local actor
-    uint64_t localActor = 0;
-    if (!reader.ReadMemory<uint64_t>(
-            localPlayer + bloodstrike::field::ClientPlayer_to_localActor,
-            localActor))
-    {
-        std::cerr << "[ESP] Failed to read local actor.\n";
-        return;
-    }
-
-    std::wcout << L"[ESP] Local actor: 0x" << std::hex << localActor << std::dec << L"\n";
+    std::wcout << L"[ESP] Local actor at:  0x" << std::hex << localActor << std::dec << L"\n";
+    std::wcout << L"[ESP] Entity list at:  0x" << std::hex << entityListPtr << std::dec << L"\n";
 
     // Screen dimensions
     int screenW = overlay.GetWidth();
