@@ -35,19 +35,7 @@ bool                    g_Initialized = false;
 
 static WNDPROC g_OldWndProc = nullptr;
 static void**  g_SwapChainVTable = nullptr;
-static bool    g_ConsoleOpen = false;
 
-// ============================================================
-// Debug console
-// ============================================================
-static void OpenConsole() {
-    AllocConsole();
-    FILE* f;
-    freopen_s(&f, "CONOUT$", "w", stdout);
-    freopen_s(&f, "CONOUT$", "w", stderr);
-    g_ConsoleOpen = true;
-    printf("[DLL] Console opened.\n");
-}
 
 // ============================================================
 // RTV management
@@ -224,35 +212,6 @@ bool InstallHooks() {
 
     printf("[DLL] VTable hooks installed.\n");
     return true;
-}
-
-// ============================================================
-// Main thread
-// ============================================================
-static DWORD WINAPI MainThread(LPVOID hModule) {
-    OpenConsole();
-    printf("[DLL] MainThread started.\n");
-
-    while (!GetModuleHandleA(NULL)) Sleep(100);
-    Sleep(3000);  // Wait for DX11 to initialize
-
-    printf("[DLL] Creating dummy device...\n");
-    if (!CreateDummyDevice()) {
-        printf("[DLL] Failed to create dummy device.\n");
-        return 1;
-    }
-
-    printf("[DLL] Installing vtable hooks...\n");
-    if (!InstallVTableHooks()) {
-        printf("[DLL] Failed to install hooks.\n");
-        return 1;
-    }
-
-    printf("[DLL] Hooks active. ESP will render on next Present call.\n");
-    printf("[DLL] Press Insert to toggle menu.\n");
-
-    while (true) Sleep(1000);
-    return 0;
 }
 
 
